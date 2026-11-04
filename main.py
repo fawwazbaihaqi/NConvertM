@@ -60,7 +60,7 @@ def main():
     }
     
     # Menggunakan model gemini-2.5-flash yang stabil
-    model = genai.GenerativeModel(model_name="gemini-3.8-flash", generation_config=generation_config)
+    model = genai.GenerativeModel(model_name="gemini-3.1-pro", generation_config=generation_config)
     
     # Mekanisme Coba Ulang (Retry) jika terkena Limit 429
     max_retries = 3
