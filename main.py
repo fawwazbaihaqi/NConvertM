@@ -1,46 +1,45 @@
 import os
 import json
-import time
+import re
 import feedparser
 import google.generativeai as genai
 import requests
 
-# 1. Ambil Kunci Rahasia dari GitHub Secrets
+# 1. Ambil Secrets
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# Konfigurasi Gemini
+if not all([GEMINI_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
+    raise ValueError("Salah satu GitHub Secrets (GEMINI, BOT_TOKEN, atau CHAT_ID) belum disetel!")
+
 genai.configure(api_key=GEMINI_API_KEY)
 
-# 2. Fungsi Kirim Pesan ke Telegram
-def send_telegram(message):
+# 2. Fungsi Kirim Telegram (Kebal Error Parsing)
+def send_telegram(message_text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    
+    # Percobaan 1: Coba kirim dengan format Markdown
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
+        "text": message_text,
         "parse_mode": "Markdown"
     }
-    requests.post(url, json=payload)
+    res = requests.post(url, json=payload)
+    
+    # Percobaan 2: Jika Telegram menolak karena karakter Markdown aneh, kirim sebagai teks polos
+    if res.status_code != 200:
+        print("Pengiriman Markdown gagal, mencoba kirim sebagai teks biasa...")
+        clean_text = message_text.replace("*", "").replace("`", "").replace("_", "")
+        payload_plain = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": clean_text
+        }
+        res_plain = requests.post(url, json=payload_plain)
+        if res_plain.status_code != 200:
+            raise Exception(f"Gagal mengirim pesan Telegram: {res_plain.text}")
 
-# 3. Fungsi Deteksi Model Valid Otomatis
-def get_available_model():
-    print("Mencari model Gemini yang tersedia untuk API Key Anda...")
-    available_models = []
-    for m in genai.list_models():
-        if "generateContent" in m.supported_generation_methods:
-            available_models.append(m.name)
-            print(f"- Ditemukan: {m.name}")
-
-    if not available_models:
-        raise Exception("Tidak ada model generateContent yang ditemukan untuk API Key ini.")
-
-    # Prioritaskan model flash jika ada, jika tidak gunakan model pertama
-    chosen_model = next((m for m in available_models if "flash" in m), available_models[0])
-    print(f"Menggunakan model: {chosen_model}")
-    return chosen_model
-
-# 4. Fungsi Utama
+# 3. Fungsi Utama
 def main():
     rss_url = "https://news.google.com/rss/search?q=berita+pendakian&hl=id&gl=ID&ceid=ID:id"
     feed = feedparser.parse(rss_url)
@@ -61,66 +60,51 @@ def main():
     Analisis berita berikut:
     Judul: {title}
     Ringkasan: {snippet}
-    Sumber Link: {link}
+    Sumber: {link}
 
-    Tugasmu adalah mengubah berita ini menjadi format JSON murni tanpa teks pengantar dengan key berikut:
-    - "judul_cover": Teks singkat maksimal 8 kata yang menarik untuk cover Reels.
-    - "judul_baru": Judul menarik, edukatif, dan clickbait positif untuk awal caption.
-    - "intro": 1-2 kalimat pembuka yang relevan dengan kehidupan pendaki.
-    - "isi_berita": Rangkuman inti berita secara padat dan jelas.
-    - "kesimpulan": Pesan moral dan pengingat keselamatan (safety reminder) bagi pendaki.
-    - "sumber": Cantumkan teks sumber asli dan link-nya.
+    Ubah berita ini menjadi format JSON murni TANPA tanda kutip backtick markdown di luar JSON. Struktur JSON harus memiliki key persis berikut:
+    {{
+      "judul_cover": "Teks singkat maksimal 8 kata untuk cover Reels",
+      "judul_baru": "Judul menarik dan edukatif untuk awal caption",
+      "intro": "1-2 kalimat pembuka yang relevan dengan pendaki",
+      "isi_berita": "Rangkuman inti berita secara padat dan jelas",
+      "kesimpulan": "Pesan keselamatan bagi pendaki terkait berita ini",
+      "sumber": "Cantumkan nama media sumber berita"
+    }}
     """
 
-    generation_config = {
-        "response_mime_type": "application/json",
-    }
+    # Model resmi sesuai ketentuan Google API terbaru
+    model = genai.GenerativeModel(model_name="gemini-3.8-flash")
+    response = model.generate_content(prompt)
     
-    # Pilih model secara dinamis
-    model_name = get_available_model()
-    model = genai.GenerativeModel(model_name=model_name, generation_config=generation_config)
+    # Pembersihan string JSON jika AI menambahkan formatting markdown
+    raw_text = response.text.strip()
+    clean_json_str = re.sub(r"^```json\s*", "", raw_text)
+    clean_json_str = re.sub(r"\s*```$", "", clean_json_str).strip()
     
-    # Mekanisme Coba Ulang (Retry) jika terkena Limit 429
-    max_retries = 3
-    response = None
-    
-    for attempt in range(max_retries):
-        try:
-            response = model.generate_content(prompt)
-            break
-        except Exception as e:
-            print(f"Percobaan {attempt+1} gagal: {e}")
-            if attempt < max_retries - 1:
-                print("Menunggu 20 detik sebelum mencoba ulang...")
-                time.sleep(20)
-            else:
-                raise e
+    data = json.loads(clean_json_str)
 
-    if response:
-        data = json.loads(response.text)
+    # Format draf untuk dikirim ke Telegram
+    pesan_telegram = f"""⛺ DRAF KONTEN BARU - CAMPERSMAGZ ⛺
 
-        pesan_telegram = f"""
-⛺ *DRAF KONTEN BARU - CAMPERSMAGZ* ⛺
-
-📌 *Teks Cover Reels:*
+📌 Teks Cover Reels:
 `{data.get('judul_cover')}`
 
-📝 *Caption Instagram & TikTok:*
-*_{data.get('judul_baru')}_*
+📝 Caption Instagram & TikTok:
+*{data.get('judul_baru')}*
 
 {data.get('intro')}
 
 {data.get('isi_berita')}
 
-⚠️ *Pengingat Pendaki:*
+⚠️ Pengingat Pendaki:
 {data.get('kesimpulan')}
 
-🔗 {data.get('sumber')}
-#CampersMagz #InfoGunung #PendakiIndonesia
-        """
+🔗 Sumber: {data.get('sumber')} ({link})
+#CampersMagz #InfoGunung #PendakiIndonesia"""
 
-        send_telegram(pesan_telegram)
-        print("Draf berhasil dikirim ke Telegram!")
+    send_telegram(pesan_telegram)
+    print("Draf berhasil dikirim ke Telegram!")
 
 if __name__ == "__main__":
     main()
