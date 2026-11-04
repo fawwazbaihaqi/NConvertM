@@ -15,7 +15,7 @@ if not all([GROQ_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
 
 client = Groq(api_key=GROQ_API_KEY)
 
-# 2. Fungsi Kirim Telegram (Aman dari kegagalan karakter format Markdown)
+# 2. Fungsi Kirim Telegram (Kebal Karakter Khusus)
 def send_telegram(message_text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -25,34 +25,12 @@ def send_telegram(message_text):
     }
     res = requests.post(url, json=payload)
     
-    # Fallback kirim teks biasa jika Telegram menolak parsing karakter tertentu
+    # Fallback jika karakter format markdown ditolak Telegram
     if res.status_code != 200:
         clean_text = message_text.replace("*", "").replace("`", "").replace("_", "")
         requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": clean_text})
 
-# 3. Deteksi Model Groq Aktif Secara Otomatis
-def get_groq_model():
-    print("Mengecek daftar model aktif di akun Groq...")
-    models_list = client.models.list()
-    available_ids = [m.id for m in models_list.data]
-    print(f"Model Groq terdeteksi: {available_ids}")
-
-    # Prioritaskan model Llama yang cepat dan stabil
-    preferred = ["llama-3.1-8b-instant", "llama3-70b-8192", "llama3-8b-8192"]
-    for model_name in preferred:
-        if model_name in available_ids:
-            print(f"Menggunakan model terpilih: {model_name}")
-            return model_name
-            
-    # Jika tidak ada nama persis di atas, pilih model apa pun yang mengandung kata 'llama'
-    for mid in available_ids:
-        if "llama" in mid.lower():
-            print(f"Menggunakan model fallback: {mid}")
-            return mid
-            
-    return available_ids[0]
-
-# 4. Fungsi Utama
+# 3. Fungsi Utama
 def main():
     rss_url = "https://news.google.com/rss/search?q=berita+pendakian&hl=id&gl=ID&ceid=ID:id"
     feed = feedparser.parse(rss_url)
@@ -72,7 +50,7 @@ def main():
         "Kamu adalah AI content creator untuk media edukasi outdoor @CampersMagz. "
         "Ubah berita yang diberikan menjadi format JSON murni TANPA tanda kutip backtick markdown di luar JSON. "
         "Format JSON wajib memiliki key persis berikut:\n"
-        "- 'judul_cover': Teks singkat maksimal 8 kata untuk cover Reels.\n"
+        "- 'judul_cover': Teks singkat maksimal 8 kata yang menarik untuk cover Reels.\n"
         "- 'judul_baru': Judul menarik dan edukatif untuk awal caption.\n"
         "- 'intro': 1-2 kalimat pembuka yang relevan bagi pendaki.\n"
         "- 'isi_berita': Rangkuman inti berita secara padat dan jelas.\n"
@@ -81,14 +59,14 @@ def main():
     )
 
     user_content = f"Judul: {title}\nRingkasan: {snippet}\nSumber: {link}"
-    active_model = get_groq_model()
 
+    # Menggunakan model teks generator Qwen 3.8 27B yang aktif di akun Anda
     chat_completion = client.chat.completions.create(
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content}
         ],
-        model=active_model
+        model="qwen/qwen3.8-27b"
     )
 
     raw_response = chat_completion.choices[0].message.content.strip()
