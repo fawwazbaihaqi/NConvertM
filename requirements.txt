@@ -4,4 +4,3 @@ groq==0.18.0
 Pillow==10.4.0
 pyTelegramBotAPI==4.22.0
 beautifulsoup4==4.12.3
-google-genai==0.3.0
