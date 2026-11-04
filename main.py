@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import feedparser
 import google.generativeai as genai
 import requests
@@ -22,17 +23,15 @@ def send_telegram(message):
     }
     requests.post(url, json=payload)
 
-# 3. Fungsi Utama
+# 3. Fungsi Utama dengan Proteksi Rate Limit
 def main():
-    # URL Google News RSS untuk CampersMagz
-    rss_url = "https://news.google.com/rss/search?q=pendakian+OR+camping+OR+gunung&hl=id&gl=ID&ceid=ID:id"
+    rss_url = "https://news.google.com/rss/search?q=berita+pendakian&hl=id&gl=ID&ceid=ID:id"
     feed = feedparser.parse(rss_url)
     
     if not feed.entries:
         print("Tidak ada berita ditemukan.")
         return
 
-    # Ambil berita teratas (paling baru)
     latest_article = feed.entries[0]
     title = latest_article.title
     link = latest_article.link
@@ -40,7 +39,6 @@ def main():
 
     print(f"Berita ditemukan: {title}")
 
-    # 4. Prompt Gemini dengan Format JSON Ketat
     prompt = f"""
     Kamu adalah AI content creator untuk media edukasi outdoor @CampersMagz. 
     Analisis berita berikut:
@@ -57,18 +55,33 @@ def main():
     - "sumber": Cantumkan teks sumber asli dan link-nya.
     """
 
-    # Panggil Gemini API (Menggunakan Gemini Flash yang cepat & hemat)
     generation_config = {
         "response_mime_type": "application/json",
     }
-    model = genai.GenerativeModel(model_name="gemini-3.8-flash", generation_config=generation_config)
-    response = model.generate_content(prompt)
     
-    # Parse hasil JSON dari Gemini
-    data = json.loads(response.text)
+    # Menggunakan model gemini-2.5-flash yang stabil
+    model = genai.GenerativeModel(model_name="gemini-2.5-flash", generation_config=generation_config)
+    
+    # Mekanisme Coba Ulang (Retry) jika terkena Limit 429
+    max_retries = 3
+    response = None
+    
+    for attempt in range(max_retries):
+        try:
+            response = model.generate_content(prompt)
+            break
+        except Exception as e:
+            print(f"Percobaan {attempt+1} gagal karena limit: {e}")
+            if attempt < max_retries - 1:
+                print("Menunggu 30 detik sebelum mencoba ulang...")
+                time.sleep(30)
+            else:
+                raise e
 
-    # Susun format pesan Telegram siap review
-    pesan_telegram = f"""
+    if response:
+        data = json.loads(response.text)
+
+        pesan_telegram = f"""
 ⛺ *DRAF KONTEN BARU - CAMPERSMAGZ* ⛺
 
 📌 *Teks Cover Reels:*
@@ -86,11 +99,10 @@ def main():
 
 🔗 {data.get('sumber')}
 #CampersMagz #InfoGunung #PendakiIndonesia
-    """
+        """
 
-    # Kirim ke Telegram Anda
-    send_telegram(pesan_telegram)
-    print("Draf berhasil dikirim ke Telegram!")
+        send_telegram(pesan_telegram)
+        print("Draf berhasil dikirim ke Telegram!")
 
 if __name__ == "__main__":
     main()
