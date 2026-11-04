@@ -23,7 +23,24 @@ def send_telegram(message):
     }
     requests.post(url, json=payload)
 
-# 3. Fungsi Utama dengan Proteksi Rate Limit
+# 3. Fungsi Deteksi Model Valid Otomatis
+def get_available_model():
+    print("Mencari model Gemini yang tersedia untuk API Key Anda...")
+    available_models = []
+    for m in genai.list_models():
+        if "generateContent" in m.supported_generation_methods:
+            available_models.append(m.name)
+            print(f"- Ditemukan: {m.name}")
+
+    if not available_models:
+        raise Exception("Tidak ada model generateContent yang ditemukan untuk API Key ini.")
+
+    # Prioritaskan model flash jika ada, jika tidak gunakan model pertama
+    chosen_model = next((m for m in available_models if "flash" in m), available_models[0])
+    print(f"Menggunakan model: {chosen_model}")
+    return chosen_model
+
+# 4. Fungsi Utama
 def main():
     rss_url = "https://news.google.com/rss/search?q=berita+pendakian&hl=id&gl=ID&ceid=ID:id"
     feed = feedparser.parse(rss_url)
@@ -35,7 +52,7 @@ def main():
     latest_article = feed.entries[0]
     title = latest_article.title
     link = latest_article.link
-    snippet = latest_article.get('summary', '')
+    snippet = latest_article.get("summary", "")
 
     print(f"Berita ditemukan: {title}")
 
@@ -59,8 +76,9 @@ def main():
         "response_mime_type": "application/json",
     }
     
-    # Menggunakan model gemini-2.5-flash yang stabil
-    model = genai.GenerativeModel(model_name="gemini-3.1-pro", generation_config=generation_config)
+    # Pilih model secara dinamis
+    model_name = get_available_model()
+    model = genai.GenerativeModel(model_name=model_name, generation_config=generation_config)
     
     # Mekanisme Coba Ulang (Retry) jika terkena Limit 429
     max_retries = 3
@@ -71,10 +89,10 @@ def main():
             response = model.generate_content(prompt)
             break
         except Exception as e:
-            print(f"Percobaan {attempt+1} gagal karena limit: {e}")
+            print(f"Percobaan {attempt+1} gagal: {e}")
             if attempt < max_retries - 1:
-                print("Menunggu 30 detik sebelum mencoba ulang...")
-                time.sleep(30)
+                print("Menunggu 20 detik sebelum mencoba ulang...")
+                time.sleep(20)
             else:
                 raise e
 
