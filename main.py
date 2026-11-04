@@ -1,25 +1,22 @@
 import os
 import json
-import re
 import feedparser
-import google.generativeai as genai
+from groq import Groq
 import requests
 
 # 1. Ambil Secrets
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-if not all([GEMINI_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
-    raise ValueError("Salah satu GitHub Secrets (GEMINI, BOT_TOKEN, atau CHAT_ID) belum disetel!")
+if not all([GROQ_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
+    raise ValueError("Pastikan GROQ_API_KEY, TELEGRAM_BOT_TOKEN, dan TELEGRAM_CHAT_ID sudah disetel di Secrets!")
 
-genai.configure(api_key=GEMINI_API_KEY)
+client = Groq(api_key=GROQ_API_KEY)
 
-# 2. Fungsi Kirim Telegram (Kebal Error Parsing)
+# 2. Fungsi Kirim Telegram
 def send_telegram(message_text):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    
-    # Percobaan 1: Coba kirim dengan format Markdown
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": message_text,
@@ -27,17 +24,10 @@ def send_telegram(message_text):
     }
     res = requests.post(url, json=payload)
     
-    # Percobaan 2: Jika Telegram menolak karena karakter Markdown aneh, kirim sebagai teks polos
+    # Fallback jika karakter format markdown ditolak Telegram
     if res.status_code != 200:
-        print("Pengiriman Markdown gagal, mencoba kirim sebagai teks biasa...")
         clean_text = message_text.replace("*", "").replace("`", "").replace("_", "")
-        payload_plain = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": clean_text
-        }
-        res_plain = requests.post(url, json=payload_plain)
-        if res_plain.status_code != 200:
-            raise Exception(f"Gagal mengirim pesan Telegram: {res_plain.text}")
+        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": clean_text})
 
 # 3. Fungsi Utama
 def main():
@@ -53,38 +43,34 @@ def main():
     link = latest_article.link
     snippet = latest_article.get("summary", "")
 
-    print(f"Berita ditemukan: {title}")
+    print(f"Memproses berita: {title}")
 
-    prompt = f"""
-    Kamu adalah AI content creator untuk media edukasi outdoor @CampersMagz. 
-    Analisis berita berikut:
-    Judul: {title}
-    Ringkasan: {snippet}
-    Sumber: {link}
+    system_prompt = (
+        "Kamu adalah AI content creator untuk media edukasi outdoor @CampersMagz. "
+        "Tugasmu merangkum berita menjadi format JSON murni dengan key: "
+        "'judul_cover' (maks 8 kata untuk cover Reels), "
+        "'judul_baru' (judul menarik & edukatif), "
+        "'intro' (1-2 kalimat pembuka relevan bagi pendaki), "
+        "'isi_berita' (rangkuman kronologi/inti berita), "
+        "'kesimpulan' (peringatan keamanan & safety reminder untuk pendaki), "
+        "'sumber' (nama media berita asal)."
+    )
 
-    Ubah berita ini menjadi format JSON murni TANPA tanda kutip backtick markdown di luar JSON. Struktur JSON harus memiliki key persis berikut:
-    {{
-      "judul_cover": "Teks singkat maksimal 8 kata untuk cover Reels",
-      "judul_baru": "Judul menarik dan edukatif untuk awal caption",
-      "intro": "1-2 kalimat pembuka yang relevan dengan pendaki",
-      "isi_berita": "Rangkuman inti berita secara padat dan jelas",
-      "kesimpulan": "Pesan keselamatan bagi pendaki terkait berita ini",
-      "sumber": "Cantumkan nama media sumber berita"
-    }}
-    """
+    user_content = f"Judul: {title}\nRingkasan: {snippet}\nSumber: {link}"
 
-    # Model resmi sesuai ketentuan Google API terbaru
-    model = genai.GenerativeModel(model_name="gemini-3.8-flash")
-    response = model.generate_content(prompt)
-    
-    # Pembersihan string JSON jika AI menambahkan formatting markdown
-    raw_text = response.text.strip()
-    clean_json_str = re.sub(r"^```json\s*", "", raw_text)
-    clean_json_str = re.sub(r"\s*```$", "", clean_json_str).strip()
-    
-    data = json.loads(clean_json_str)
+    # Panggil Groq Llama 3.3 70B dengan JSON Mode
+    chat_completion = client.chat.completions.create(
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
+        ],
+        model="llama-3.3-70b-versatile",
+        response_format={"type": "json_object"}
+    )
 
-    # Format draf untuk dikirim ke Telegram
+    raw_response = chat_completion.choices[0].message.content
+    data = json.loads(raw_response)
+
     pesan_telegram = f"""⛺ DRAF KONTEN BARU - CAMPERSMAGZ ⛺
 
 📌 Teks Cover Reels:
@@ -104,7 +90,7 @@ def main():
 #CampersMagz #InfoGunung #PendakiIndonesia"""
 
     send_telegram(pesan_telegram)
-    print("Draf berhasil dikirim ke Telegram!")
+    print("Draf CampersMagz berhasil dikirim ke Telegram!")
 
 if __name__ == "__main__":
     main()
