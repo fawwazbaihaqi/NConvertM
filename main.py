@@ -12,28 +12,50 @@ from bs4 import BeautifulSoup
 from PIL import Image, ImageDraw, ImageFont
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from openai import OpenAI
-from google import genai
 
 # ==========================================
-# 1. KONFIGURASI API & SECRETS
+# 1. KONFIGURASI API & CLIENTS
 # ==========================================
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GH_TOKEN = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-if not all([GH_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
-    raise ValueError("Pastikan GH_TOKEN, TELEGRAM_BOT_TOKEN, dan TELEGRAM_CHAT_ID sudah disetel di Secrets!")
+if not all([TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
+    raise ValueError("Pastikan TELEGRAM_BOT_TOKEN dan TELEGRAM_CHAT_ID sudah disetel di Secrets!")
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
-# Client GitHub Models menggunakan endpoint Azure AI
-ai_client = OpenAI(
-    base_url="https://models.inference.ai.azure.com",
-    api_key=GH_TOKEN
-)
-genai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+# Inisialisasi Groq Client
+groq_client = None
+if GROQ_API_KEY:
+    try:
+        from groq import Groq
+        groq_client = Groq(api_key=GROQ_API_KEY)
+    except Exception as e:
+        print(f"Info: Groq SDK tidak aktif: {e}")
+
+# Inisialisasi GitHub Models Client
+gh_client = None
+if GH_TOKEN:
+    try:
+        from openai import OpenAI
+        gh_client = OpenAI(
+            base_url="https://models.inference.ai.azure.com",
+            api_key=GH_TOKEN
+        )
+    except Exception as e:
+        print(f"Info: GitHub Models SDK tidak aktif: {e}")
+
+# Inisialisasi Gemini Client
+genai_client = None
+if GEMINI_API_KEY:
+    try:
+        from google import genai
+        genai_client = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception as e:
+        print(f"Info: Google GenAI SDK tidak aktif: {e}")
 
 state = {
     "articles": [],
@@ -51,7 +73,7 @@ state = {
 }
 
 # ==========================================
-# 2. PENGUNDUH FONT NUNITO OTOMATIS
+# 2. SISTEM FONT NUNITO OTOMATIS
 # ==========================================
 def ensure_nunito_fonts():
     fonts = {
@@ -67,7 +89,7 @@ def ensure_nunito_fonts():
                     with open(f_name, "wb") as f:
                         f.write(r.content)
             except Exception as e:
-                print(f"Gagal unduh {f_name}: {e}")
+                print(f"Gagal unduh font {f_name}: {e}")
 
 ensure_nunito_fonts()
 
@@ -97,7 +119,7 @@ def find_asset_file(exact_names, fallback_keywords):
     return None
 
 # ==========================================
-# 3. SCRAPER BERITA & GENERATOR NANO BANANA
+# 3. SCRAPER BERITA & NANO BANANA ART
 # ==========================================
 def fetch_articles():
     rss_url = "https://news.google.com/rss/search?q=berita+pendakian+gunung&hl=id&gl=ID&ceid=ID:id"
@@ -222,7 +244,7 @@ def generate_nano_banana_art(prompt_subject):
     return False
 
 # ==========================================
-# 4. KONTEN DRAF BERITA (GITHUB MODELS - GPT-4O-MINI)
+# 4. KONTEN DRAF BERITA (3-TIER AI ENGINE)
 # ==========================================
 def generate_converter_content(article):
     system_prompt = (
@@ -245,22 +267,64 @@ def generate_converter_content(article):
     )
     user_txt = f"Judul: {article.title}\nRingkasan: {article.get('summary', '')[:400]}"
 
-    try:
-        response = ai_client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_txt}
-            ],
-            model="gpt-4o-mini",
-            response_format={"type": "json_object"},
-            temperature=0.4
-        )
-        raw = response.choices[0].message.content.strip()
-        raw = re.sub(r"^```json\s*|\s*```$", "", raw).strip()
-        return json.loads(raw)
-    except Exception as e:
-        print(f"Error GitHub Models: {e}")
-        raise RuntimeError(f"Gagal memproses draf berita dari GitHub Models: {e}")
+    # Prioritas 1: Groq (Qwen 3.8 / 27B)
+    if groq_client:
+        try:
+            print("Langkah 1: Memproses draf via Groq (qwen/qwen3.8-27b)...")
+            res = groq_client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_txt}
+                ],
+                model="qwen/qwen3.8-27b",
+                max_tokens=600,
+                temperature=0.5
+            )
+            raw = res.choices[0].message.content.strip()
+            raw = re.sub(r"^```json\s*|\s*```$", "", raw).strip()
+            return json.loads(raw)
+        except Exception as e:
+            print(f"Groq terkendala ({e}), beralih ke Langkah 2 (GitHub Models)...")
+
+    # Prioritas 2: GitHub Models (GPT-4o-mini)
+    if gh_client:
+        try:
+            print("Langkah 2: Memproses draf via GitHub Models (gpt-4o-mini)...")
+            res = gh_client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_txt}
+                ],
+                model="gpt-4o-mini",
+                response_format={"type": "json_object"},
+                temperature=0.4,
+                timeout=12.0
+            )
+            raw = res.choices[0].message.content.strip()
+            raw = re.sub(r"^```json\s*|\s*```$", "", raw).strip()
+            return json.loads(raw)
+        except Exception as e:
+            print(f"GitHub Models terkendala ({e}), beralih ke Langkah 3 (Gemini Flash)...")
+
+    # Prioritas 3: Gemini (Gemini 2.5 Flash)
+    if genai_client:
+        try:
+            print("Langkah 3: Memproses draf via Gemini 2.5 Flash...")
+            full_prompt = f"{system_prompt}\n\nBerita yang dianalisis:\n{user_txt}"
+            res = genai_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=full_prompt,
+                config={
+                    "response_mime_type": "application/json"
+                }
+            )
+            raw = res.text.strip()
+            raw = re.sub(r"^```json\s*|\s*```$", "", raw).strip()
+            return json.loads(raw)
+        except Exception as e:
+            print(f"Gemini Flash terkendala: {e}")
+
+    raise RuntimeError("Seluruh mesin AI (Groq, GitHub Models, Gemini) gagal memproses draf berita.")
 
 def build_full_article_text():
     d = state["converter_data"]
@@ -463,7 +527,7 @@ def draw_centered_video_text(base_img, y_pos, text, font, text_color=(255, 255, 
         mark_part = text[-split_len:] + ("!" if split_len == 1 else "")
         bbox_main = draw.textbbox((0, 0), main_part, font=font)
         mw = bbox_main[2] - bbox_main[0]
-        draw.text((x_pos, y_pos), main_part, font=font, fill=text_color)
+        draw.text((x_pos, y_pos), main_part, font=fill_text := text_color)
         draw.text((x_pos + mw, y_pos), mark_part, font=font, fill=(235, 30, 30, 255))
     else:
         draw.text((x_pos, y_pos), text, font=font, fill=text_color)
