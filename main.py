@@ -1,5 +1,4 @@
 import os
-import glob
 import json
 import re
 import base64
@@ -14,11 +13,13 @@ from PIL import Image, ImageDraw, ImageFont
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from groq import Groq
+from google import genai
 
 # ==========================================
 # 1. KONFIGURASI API & SECRETS
 # ==========================================
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
@@ -27,6 +28,7 @@ if not all([GROQ_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 groq_client = Groq(api_key=GROQ_API_KEY)
+genai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 state = {
     "articles": [],
@@ -36,46 +38,61 @@ state = {
     "selected_title": "",
     "cover_source_img": "source_img.jpg",
     "final_cover_img": "final_cover.png",
+    "waiting_for_cover_upload": False,
     "waiting_for_video_upload": False,
     "uploaded_video_path": "user_video.mp4",
     "custom_source_text": "",
     "is_ai_art": False
 }
 
-def get_font(size, bold=True):
-    if bold:
-        paths = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
-        ]
-    else:
-        paths = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
-        ]
-    for path in paths:
+# ==========================================
+# 2. PENGUNDUH FONT NUNITO OTOMATIS
+# ==========================================
+def ensure_nunito_fonts():
+    fonts = {
+        "Nunito-Bold.ttf": "https://github.com/google/fonts/raw/main/ofl/nunito/Nunito-Bold.ttf",
+        "Nunito-Regular.ttf": "https://github.com/google/fonts/raw/main/ofl/nunito/Nunito-Regular.ttf"
+    }
+    headers = {"User-Agent": "Mozilla/5.0"}
+    for f_name, url in fonts.items():
+        if not os.path.exists(f_name):
+            try:
+                r = requests.get(url, headers=headers, timeout=10)
+                if r.status_code == 200:
+                    with open(f_name, "wb") as f:
+                        f.write(r.content)
+            except Exception as e:
+                print(f"Gagal unduh {f_name}: {e}")
+
+ensure_nunito_fonts()
+
+def get_nunito_font(size, bold=True):
+    font_path = "Nunito-Bold.ttf" if bold else "Nunito-Regular.ttf"
+    if os.path.exists(font_path):
+        return ImageFont.truetype(font_path, int(size))
+    fallback_paths = [
+        f"/usr/share/fonts/truetype/dejavu/DejaVuSans{'-Bold' if bold else ''}.ttf",
+        f"/usr/share/fonts/truetype/liberation/LiberationSans{'-Bold' if bold else '-Regular'}.ttf"
+    ]
+    for path in fallback_paths:
         if os.path.exists(path):
-            return ImageFont.truetype(path, size)
+            return ImageFont.truetype(path, int(size))
     return ImageFont.load_default()
 
-# ==========================================
-# 2. PENDETEKSI FILE LOGO OTOMATIS (CASE-INSENSITIVE)
-# ==========================================
-def find_asset_file(keywords):
-    """Mencari file gambar di repository tanpa peduli huruf besar/kecil atau spasi"""
-    all_files = os.listdir(".")
-    for f in all_files:
-        if not f.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
-            continue
-        f_clean = f.lower().replace("_", " ").replace("-", " ")
-        for kw in keywords:
-            if kw.lower() in f_clean:
-                print(f"Menemukan aset logo: {f} (cocok dengan kata kunci '{kw}')")
-                return f
+def find_asset_file(exact_names, fallback_keywords):
+    for name in exact_names:
+        if os.path.exists(name):
+            return name
+    for f in os.listdir("."):
+        if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+            f_clean = f.lower().replace("_", " ").replace("-", " ")
+            for kw in fallback_keywords:
+                if kw.lower() in f_clean:
+                    return f
     return None
 
 # ==========================================
-# 3. SCRAPER FOTO ASLI BERITA (MULTI-LAYER)
+# 3. SCRAPER BERITA & GENERATOR NANO BANANA
 # ==========================================
 def fetch_articles():
     rss_url = "https://news.google.com/rss/search?q=berita+pendakian+gunung&hl=id&gl=ID&ceid=ID:id"
@@ -84,7 +101,6 @@ def fetch_articles():
     state["current_idx"] = 0
 
 def resolve_google_news_url(google_url):
-    """Mendekode URL Google News untuk mendapatkan URL asli portal berita"""
     try:
         if "articles/CBM" in google_url:
             token = google_url.split("articles/")[1].split("?")[0]
@@ -92,39 +108,30 @@ def resolve_google_news_url(google_url):
             decoded_bytes = base64.urlsafe_b64decode(padded)
             match_url = re.search(rb'https?://[^\x00-\x1f\x7f-\xff]+', decoded_bytes)
             if match_url:
-                real_url = match_url.group(0).decode("utf-8", errors="ignore")
-                return real_url
-    except Exception as e:
-        print(f"Gagal decode base64: {e}")
+                return match_url.group(0).decode("utf-8", errors="ignore")
+    except:
+        pass
 
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        }
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0"}
         resp = requests.get(google_url, headers=headers, timeout=8, allow_redirects=True)
         if "google.com" not in resp.url:
             return resp.url
-        # Ekstrak data-n-au
         match = re.search(r'data-n-au="([^"]+)"', resp.text)
         if match:
             return match.group(1)
-    except Exception as e:
-        print(f"Bypass redirect gagal: {e}")
-
+    except:
+        pass
     return google_url
 
 def extract_article_image(article_entry):
-    """Mengambil foto asli berita dari situs media atau dari liputan pers terkait"""
     state["is_ai_art"] = False
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0",
         "Referer": "https://www.google.com/"
     }
 
     real_url = resolve_google_news_url(article_entry.link)
-    print(f"Mencoba mengambil gambar dari portal berita: {real_url}")
-
-    # 1. Scrape langsung dari website berita asli (Kompas, Detik, Antara, dll)
     if "news.google.com" not in real_url:
         try:
             resp = requests.get(real_url, headers=headers, timeout=12, allow_redirects=True)
@@ -150,73 +157,73 @@ def extract_article_image(article_entry):
                 img = Image.open(BytesIO(img_data)).convert("RGB")
                 if img.width >= 250:
                     img.save(state["cover_source_img"])
-                    print(f"SUKSES mengambil foto asli berita: {img_url}")
                     return True
-        except Exception as e:
-            print(f"Scraping portal gagal: {e}")
+        except:
+            pass
 
-    # 2. Mengambil foto dokumentasi berita nyata dari mesin pencari pers (Bukan AI)
     try:
         clean_title = article_entry.title.rsplit("-", 1)[0].strip()
-        search_query = f"{clean_title} berita"
-        print(f"Mencari dokumentasi foto pers untuk: {search_query}")
-        bing_url = f"https://www.bing.com/images/search?q={urllib.parse.quote(search_query)}&qft=+filterui:imagesize-large&form=HDRSC2"
+        bing_url = f"https://www.bing.com/images/search?q={urllib.parse.quote(clean_title + ' berita')}&form=HDRSC2"
         r = requests.get(bing_url, headers=headers, timeout=10)
         img_urls = re.findall(r'murl&quot;:&quot;(https?://[^&]+?)&quot;', r.text)
-        
-        for candidate in img_urls[:5]:
-            # Hindari domain generator AI agar foto berita asli yang masuk
-            if any(bad in candidate.lower() for bad in ["pollinations", "freepik", "stock", "vector"]):
+        for candidate in img_urls[:6]:
+            if any(bad in candidate.lower() for bad in ["pollinations", "freepik", "vector", "icon"]):
                 continue
             try:
                 c_data = requests.get(candidate, headers=headers, timeout=8).content
                 c_img = Image.open(BytesIO(c_data)).convert("RGB")
-                if c_img.width >= 400 and c_img.height >= 250:
+                if c_img.width >= 350 and c_img.height >= 220:
                     c_img.save(state["cover_source_img"])
-                    print(f"SUKSES mengambil dokumentasi foto berita: {candidate}")
                     return True
             except:
                 continue
-    except Exception as e:
-        print(f"Pencarian dokumentasi pers gagal: {e}")
+    except:
+        pass
 
-    # 3. Fallback Terakhir jika tidak ada foto berita sama sekali
-    return generate_converter_cartoon_art(article_entry.title)
+    clean_title = article_entry.title.rsplit("-", 1)[0].strip()
+    return generate_nano_banana_art(clean_title)
 
-def generate_converter_cartoon_art(prompt_subject):
+def generate_nano_banana_art(prompt_subject):
     state["is_ai_art"] = True
-    try:
-        full_prompt = (
-            f"2D editorial comic cartoon vector illustration of {prompt_subject}, "
-            f"Indonesian mountain hiker character, clean bold black ink outlines, flat vibrant colors, "
-            f"isolated on a pure solid white background at the top, white negative space, "
-            f"square 1:1 composition, no text, no letters, no speech bubbles, no watermark"
-        )
-        encoded_prompt = urllib.parse.quote(full_prompt)
-        seed = random.randint(1000, 999999)
-        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&seed={seed}&model=flux&nologo=true"
+    if not genai_client:
+        print("GEMINI_API_KEY belum disetel untuk Nano Banana!")
+        img = Image.new("RGB", (1024, 1024), color="#FFFFFF")
+        img.save(state["cover_source_img"])
+        return False
 
-        resp = requests.get(image_url, timeout=40)
-        if resp.status_code == 200:
-            img = Image.open(BytesIO(resp.content)).convert("RGB")
-            img.save(state["cover_source_img"])
-            return True
+    try:
+        prompt = (
+            f"2D editorial comic cartoon vector illustration of {prompt_subject}, "
+            f"Indonesian mountain adventure hiker character scene, clean bold black ink line art outlines, "
+            f"vibrant flat colors, subject centered and isolated on a solid pure clean white background (#FFFFFF), "
+            f"completely blank white space at top, no text, no letters, no speech bubbles, no watermark."
+        )
+        print("Memanggil Nano Banana (gemini-2.5-flash-image)...")
+        response = genai_client.models.generate_content(
+            model="gemini-2.5-flash-image",
+            contents=prompt
+        )
+        for part in response.candidates[0].content.parts:
+            if part.inline_data:
+                img = Image.open(BytesIO(part.inline_data.data)).convert("RGB")
+                img.save(state["cover_source_img"])
+                return True
     except Exception as e:
-        print(f"Error Pollinations: {e}")
+        print(f"Error Nano Banana: {e}")
 
     img = Image.new("RGB", (1024, 1024), color="#FFFFFF")
     img.save(state["cover_source_img"])
-    return True
+    return False
 
 # ==========================================
-# 4. AI CONVERTER & CONTENT GENERATOR (GROQ)
+# 4. KONTEN DRAF BERITA (GROQ)
 # ==========================================
 def generate_converter_content(article):
     system_prompt = (
         "Kamu adalah aplikasi CampersMagz News Converter. "
         "Analisis berita dan hasilkan JSON murni TANPA markdown backtick dengan struktur:\n"
         "{\n"
-        "  \"kata_kunci_utama\": \"Nama gunung atau subjek utama maksimal 2-3 kata (contoh: Arjuno / Gunung Agung / Bukit Mongkrang)\",\n"
+        "  \"kata_kunci_utama\": \"Nama gunung atau subjek utama maksimal 2-3 kata (contoh: Arjuno / Gunung Wilis / Semeru)\",\n"
         "  \"opsi_judul\": [\n"
         "    \"Judul Singkat 1 (7-10 kata, diakhiri !)\",\n"
         "    \"Judul Singkat 2 (7-10 kata, diakhiri !)\",\n"
@@ -225,8 +232,8 @@ def generate_converter_content(article):
         "  \"intro\": \"1-2 kalimat pembuka yang relevan bagi pendaki\",\n"
         "  \"isi\": \"Rangkuman berita padat, jelas, dan informatif\",\n"
         "  \"kesimpulan\": \"Pengingat keselamatan (safety reminder) bagi pendaki atas berita ini\",\n"
-        "  \"sumber_media\": \"Domain media singkat huruf kecil (contoh: kompas.com / detik.com / cna.id)\",\n"
-        "  \"art_prompt\": \"Deskripsi visual kartun 2D singkat bahasa Inggris tentang berita ini\",\n"
+        "  \"sumber_media\": \"Domain media singkat (contoh: kompas.com / detik.com)\",\n"
+        "  \"art_prompt\": \"Deskripsi adegan kartun 2D singkat bahasa Inggris tentang berita ini\",\n"
         "  \"mood_musik\": \"Pilih satu: urgent, somber, upbeat, atau chill\"\n"
         "}"
     )
@@ -256,7 +263,7 @@ def build_formatted_caption():
     )
 
 # ==========================================
-# 5. DESAIN COVER PERSIS CONVERTER (SMART LOGO DETECTOR)
+# 5. DESAIN COVER PERSIS KOORDINAT
 # ==========================================
 def draw_tent_icon(draw, x, y, size=48, color=(130, 134, 138)):
     w = size
@@ -266,56 +273,54 @@ def draw_tent_icon(draw, x, y, size=48, color=(130, 134, 138)):
     draw.polygon([(x + w // 2, y), (x, y + h), (x + w, y + h)], outline=color, width=2)
     draw.polygon([(x + w // 2, y + int(h * 0.45)), (x + int(w * 0.35), y + h), (x + int(w * 0.65), y + h)], outline=color, width=2)
 
-def draw_top_dark_logo(canvas, y_pos=110):
-    """Mendeteksi logo atas secara cerdas (apapun nama file yang diunggah)"""
-    W, _ = canvas.size
+def draw_top_dark_logo_exact(canvas):
+    target_x = 485
+    target_y = 108
+    target_w, target_h = 110, 110
     dark_grey = (82, 86, 89, 255)
-    
-    # Cari file yang mengandung kata 'top', 'atas', atau 'cover atas'
-    logo_file = find_asset_file(["top", "atas", "logo cover atas", "logo_top_dark", "logo"])
-    
+
+    logo_file = find_asset_file(["logo_top_dark.png"], ["top dark", "cover atas", "logo top dark", "logo atas"])
     if logo_file:
         try:
-            l_top = Image.open(logo_file).convert("RGBA")
-            l_top.thumbnail((115, 115), Image.Resampling.LANCZOS)
-            # Jika warna logo putih, ubah pikselnya menjadi abu-abu tua agar muncul di kanvas putih
-            r, g, b, a = l_top.split()
-            colored = Image.new("RGBA", l_top.size, dark_grey)
+            l_img = Image.open(logo_file).convert("RGBA")
+            bbox = l_img.getbbox()
+            if bbox:
+                l_img = l_img.crop(bbox)
+            l_img = l_img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+            _, _, _, a = l_img.split()
+            colored = Image.new("RGBA", l_img.size, dark_grey)
             colored.putalpha(a)
-            canvas.alpha_composite(colored, ((W - l_top.width) // 2, y_pos))
+            canvas.alpha_composite(colored, (target_x, target_y))
             return
         except Exception as e:
-            print(f"Error memuat logo atas: {e}")
+            print(f"Error load logo atas: {e}")
 
-    # Fallback jika belum ada file logo
     draw = ImageDraw.Draw(canvas)
-    cx, cy = W // 2, y_pos + 45
-    draw.ellipse([cx - 45, cy - 45, cx + 45, cy + 45], fill=dark_grey)
-    draw.ellipse([cx - 28, cy - 42, cx + 42, cy + 28], fill=(255, 255, 255, 255))
-    draw.polygon([(cx - 18, cy + 24), (cx - 2, cy - 8), (cx + 14, cy + 24)], fill=dark_grey)
-    draw.polygon([(cx, cy + 24), (cx + 16, cy - 2), (cx + 30, cy + 24)], fill=dark_grey)
+    draw.ellipse([target_x, target_y, target_x + target_w, target_y + target_h], fill=dark_grey)
+    draw.ellipse([target_x + 20, target_y + 8, target_x + target_w - 6, target_y + target_h - 18], fill=(255, 255, 255, 255))
+    draw.polygon([(target_x + 30, target_y + 84), (target_x + 50, target_y + 44), (target_x + 70, target_y + 84)], fill=dark_grey)
 
-def draw_bottom_logo(canvas, x_pos=90, y_pos=1810):
-    """Mendeteksi logo kiri bawah secara cerdas (apapun nama file yang diunggah)"""
-    logo_file = find_asset_file(["bottom", "bawah", "kiri bawah", "campersmagz", "logo_bottom"])
-    
+def draw_bottom_logo_exact(canvas):
+    target_x = 87
+    target_y = 1817
+    target_w, target_h = 194, 30
+
+    logo_file = find_asset_file(["Logo_cover_kiri_bawah.png", "logo_cover_kiri_bawah.png"], ["kiri bawah", "logo cover kiri bawah", "bottom"])
     if logo_file:
         try:
             l_bot = Image.open(logo_file).convert("RGBA")
-            l_bot.thumbnail((260, 44), Image.Resampling.LANCZOS)
-            canvas.alpha_composite(l_bot, (x_pos, y_pos + (48 - l_bot.height) // 2))
+            bbox = l_bot.getbbox()
+            if bbox:
+                l_bot = l_bot.crop(bbox)
+            l_bot = l_bot.resize((target_w, target_h), Image.Resampling.LANCZOS)
+            canvas.alpha_composite(l_bot, (target_x, target_y))
             return
         except Exception as e:
-            print(f"Error memuat logo bawah: {e}")
+            print(f"Error load logo kiri bawah: {e}")
 
-    # Fallback tipografi resmi jika file belum ditemukan
     draw = ImageDraw.Draw(canvas)
-    font_brand_big = get_font(33, bold=True)
-    font_brand_small = get_font(25, bold=True)
-    draw.text((x_pos, y_pos + 5), "C", font=font_brand_big, fill=(255, 255, 255, 255))
-    draw.text((x_pos + 26, y_pos + 11), "AMPERS", font=font_brand_small, fill=(255, 255, 255, 255))
-    draw.text((x_pos + 140, y_pos + 5), "M", font=font_brand_big, fill=(255, 255, 255, 255))
-    draw.text((x_pos + 174, y_pos + 11), "AGZ", font=font_brand_small, fill=(255, 255, 255, 255))
+    font_brand_big = get_nunito_font(28, bold=True)
+    draw.text((target_x, target_y - 2), "CAMPERSMAGZ", font=font_brand_big, fill=(255, 255, 255, 255))
 
 def create_converter_cover():
     W, H = 1080, 1920
@@ -324,41 +329,29 @@ def create_converter_cover():
 
     text_dark = (82, 86, 89, 255)
     pill_bg = (224, 224, 224, 255)
-    footer_grey = (104, 108, 111, 255)
+    footer_grey_hex = "#616264"
 
-    # 1. Logo Atas Abu-Abu Tua
-    draw_top_dark_logo(canvas, y_pos=110)
+    draw_top_dark_logo_exact(canvas)
 
     judul = state["selected_title"].strip()
     kata_kunci = state["converter_data"].get("kata_kunci_utama", "Info Gunung").strip()
 
-    # 2. Desain Sesuai Tipe (Foto Berita Asli vs AI Art)
     if not state["is_ai_art"]:
-        # === MODE FOTO ASLI (Persis Contoh Arjuno: Judul Kiri + Rounded Rectangle Box) ===
-        if len(kata_kunci) <= 7:
-            kw_size = 96
-        elif len(kata_kunci) <= 12:
-            kw_size = 80
-        else:
-            kw_size = 64
-        font_big = get_font(kw_size, bold=True)
-        font_sub = get_font(44, bold=False)
+        kw_size = 96 if len(kata_kunci) <= 8 else (78 if len(kata_kunci) <= 13 else 64)
+        font_big = get_nunito_font(kw_size, bold=True)
+        font_sub = get_nunito_font(44, bold=False)
 
         bbox_kw = draw.textbbox((0, 0), kata_kunci, font=font_big)
         kw_w = bbox_kw[2] - bbox_kw[0]
         kw_h = bbox_kw[3] - bbox_kw[1]
 
-        # Pill abu-abu muda di bawah kata kunci
         pill_y1 = 460 + kw_h - 18
-        pill_y2 = pill_y1 + 36
-        draw.rounded_rectangle([85, pill_y1, 85 + kw_w + 20, pill_y2], radius=16, fill=pill_bg)
+        draw.rounded_rectangle([85, pill_y1, 85 + kw_w + 20, pill_y1 + 34], radius=16, fill=pill_bg)
 
-        # Kata kunci & Ikon Tenda
         draw.text((90, 460), kata_kunci, font=font_big, fill=text_dark)
-        tent_x = min(90 + kw_w + 14, W - 120)
+        tent_x = min(90 + kw_w + 12, W - 120)
         draw_tent_icon(draw, tent_x, 450, size=int(kw_size * 0.5), color=(130, 134, 138))
 
-        # Sub-judul berita
         words = judul.split()
         lines, cur = [], []
         for w in words:
@@ -374,10 +367,9 @@ def create_converter_cover():
             draw.text((90, y_sub), line, font=font_sub, fill=text_dark)
             y_sub += 62
 
-        # Foto Berita Asli di dalam Kotak Rounded Rectangle
         if os.path.exists(state["cover_source_img"]):
             src_img = Image.open(state["cover_source_img"]).convert("RGBA")
-            box_w, box_h = 870, 490
+            box_w, box_h = 870, 520
             img_ratio = src_img.width / src_img.height
             box_ratio = box_w / box_h
             if img_ratio > box_ratio:
@@ -393,23 +385,17 @@ def create_converter_cover():
 
             mask = Image.new("L", (box_w, box_h), 0)
             mask_draw = ImageDraw.Draw(mask)
-            mask_draw.rounded_rectangle([0, 0, box_w, box_h], radius=36, fill=255)
-            canvas.paste(src_img, (105, 890), mask)
+            mask_draw.rounded_rectangle([0, 0, box_w, box_h], radius=38, fill=255)
+            canvas.paste(src_img, (105, 870), mask)
 
     else:
-        # === MODE KARTUN 2D AI (Persis Contoh Sungai Qolbu & Gula Merah) ===
         if os.path.exists(state["cover_source_img"]):
             art_img = Image.open(state["cover_source_img"]).convert("RGBA")
             art_img = art_img.resize((1080, 1080), Image.Resampling.LANCZOS)
-            fade_mask = Image.new("L", (1080, 1080), 255)
-            f_draw = ImageDraw.Draw(fade_mask)
-            for fy in range(140):
-                alpha_val = int(255 * (fy / 140))
-                f_draw.line([(0, fy), (1080, fy)], fill=alpha_val)
-            canvas.paste(art_img, (0, 780), fade_mask)
+            canvas.paste(art_img, (0, 740))
 
-        font_reg = get_font(50, bold=False)
-        font_bld = get_font(50, bold=True)
+        font_reg = get_nunito_font(50, bold=False)
+        font_bld = get_nunito_font(50, bold=True)
 
         words = judul.split()
         lines, cur = [], []
@@ -421,7 +407,7 @@ def create_converter_cover():
         if cur:
             lines.append(" ".join(cur))
 
-        y_txt = 560
+        y_txt = 540
         for idx_l, line in enumerate(lines[:3]):
             use_font = font_bld if idx_l == len(lines[:3]) - 1 else font_reg
             bbox = draw.textbbox((0, 0), line, font=use_font)
@@ -432,22 +418,21 @@ def create_converter_cover():
                 draw_tent_icon(draw, tx + tw + 10, y_txt - 35, size=48, color=(130, 134, 138))
             y_txt += 72
 
-    # 3. Kapsul Footer Abu-Abu Bawah
-    draw.rounded_rectangle([60, 1805, 1020, 1862], radius=28, fill=footer_grey)
-    draw_bottom_logo(canvas, x_pos=90, y_pos=1808)
+    draw.rounded_rectangle([60, 1805, 1020, 1862], radius=28, fill=footer_grey_hex)
+    draw_bottom_logo_exact(canvas)
 
-    font_credit = get_font(24, bold=False)
+    font_credit = get_nunito_font(16, bold=False)
     sumber_kredit = "foto: gemini" if state["is_ai_art"] else f"foto: {state['converter_data']['sumber_media'].lower()}"
     bbox_cr = draw.textbbox((0, 0), sumber_kredit, font=font_credit)
     cr_w = bbox_cr[2] - bbox_cr[0]
-    draw.text((990 - cr_w, 1820), sumber_kredit, font=font_credit, fill=(255, 255, 255, 255))
+    draw.text((980 - cr_w, 1822), sumber_kredit, font=font_credit, fill=(255, 255, 255, 255))
 
     out_img = canvas.convert("RGB")
     out_img.save(state["final_cover_img"])
     return state["final_cover_img"]
 
 # ==========================================
-# 6. OVERLAY KHUSUS VIDEO REELS (9:16)
+# 6. OVERLAY VIDEO REELS (9:16)
 # ==========================================
 def draw_centered_video_text(base_img, y_pos, text, font, text_color=(255, 255, 255, 255)):
     W, _ = base_img.size
@@ -474,20 +459,19 @@ def create_video_overlay(custom_source=None):
     W, H = 1080, 1920
     canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
 
-    logo_file = find_asset_file(["top", "atas", "logo cover atas", "logo_top", "logo"])
+    logo_file = find_asset_file(["logo_top.png", "logo.png"], ["top", "atas"])
     if logo_file:
         try:
             l_top = Image.open(logo_file).convert("RGBA")
+            bbox = l_top.getbbox()
+            if bbox:
+                l_top = l_top.crop(bbox)
             l_top.thumbnail((115, 115), Image.Resampling.LANCZOS)
             canvas.alpha_composite(l_top, ((W - l_top.width) // 2, 120))
         except:
             pass
-    else:
-        draw = ImageDraw.Draw(canvas)
-        draw.ellipse([W//2 - 45, 120, W//2 + 45, 210], outline=(255, 255, 255, 240), width=6)
-        draw.polygon([(W//2 - 22, 190), (W//2, 150), (W//2 + 22, 190)], fill=(255, 255, 255, 240))
 
-    font_title = get_font(50, bold=True)
+    font_title = get_nunito_font(50, bold=True)
     judul = state["selected_title"].strip()
     words = judul.split()
     lines, cur = [], []
@@ -504,8 +488,8 @@ def create_video_overlay(custom_source=None):
         draw_centered_video_text(canvas, y_title, line, font_title)
         y_title += 72
 
-    font_source = get_font(27, bold=True)
-    font_brand = get_font(42, bold=True)
+    font_source = get_nunito_font(27, bold=True)
+    font_brand = get_nunito_font(42, bold=True)
     sumber_label = custom_source if custom_source else f"Foto: {state['converter_data']['sumber_media']}"
     draw_centered_video_text(canvas, 1730, sumber_label, font_source, (240, 240, 240, 255))
     draw_centered_video_text(canvas, 1775, "CAMPERSMAGZ", font_brand, (255, 255, 255, 255))
@@ -645,6 +629,20 @@ def send_news_candidate():
     msg = f"📰 *KANDIDAT BERITA #{state['current_idx'] + 1}*\n\n*{art.title}*\n\n🔗 {art.link}"
     bot.send_message(TELEGRAM_CHAT_ID, msg, parse_mode="Markdown", reply_markup=markup)
 
+def send_cover_preview(cover_path):
+    mood_terdeteksi = state["converter_data"].get("mood_musik", "chill").upper()
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("🖼️ Pilih Gambar Ini Sebagai Cover", callback_data="cover_keep"))
+    markup.add(InlineKeyboardButton("🍌 Generate Cover dengan Nano Banana", callback_data="cover_nano"))
+    markup.add(InlineKeyboardButton("📤 Upload Foto Cover Sendiri", callback_data="cover_upload"))
+
+    with open(cover_path, "rb") as ph:
+        bot.send_photo(
+            TELEGRAM_CHAT_ID, ph,
+            caption=f"📌 *Preview Cover (Format Asli News Converter)*\n🎵 Suasana Musik: `{mood_terdeteksi}`",
+            parse_mode="Markdown", reply_markup=markup
+        )
+
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     try:
@@ -664,31 +662,25 @@ def handle_callbacks(call):
             state["selected_title"] = state["converter_data"]["opsi_judul"][0]
 
             cover_path = create_converter_cover()
-            mood_terdeteksi = state["converter_data"].get("mood_musik", "chill").upper()
+            send_cover_preview(cover_path)
 
-            markup = InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton("🖼️ Pilih Gambar Ini Sebagai Cover", callback_data="cover_keep"))
-            markup.add(InlineKeyboardButton("🎨 Generate Cover Kartun 2D (Converter)", callback_data="cover_cartoon"))
-
-            with open(cover_path, "rb") as ph:
-                bot.send_photo(
-                    TELEGRAM_CHAT_ID, ph,
-                    caption=f"📌 *Preview Cover (Format Asli News Converter)*\n🎵 Suasana Musik: `{mood_terdeteksi}`",
-                    parse_mode="Markdown", reply_markup=markup
-                )
-
-        elif data == "cover_cartoon":
-            bot.answer_callback_query(call.id, "Membuat Kartun 2D...")
-            bot.send_message(TELEGRAM_CHAT_ID, "🎨 Sedang merender Ilustrasi Kartun 2D berlatar putih...")
-            generate_converter_cartoon_art(state["converter_data"]["art_prompt"])
+        elif data == "cover_nano":
+            bot.answer_callback_query(call.id, "Menjalankan Nano Banana...")
+            bot.send_message(TELEGRAM_CHAT_ID, "🎨 Sedang membuat Graphic Art dengan Nano Banana...")
+            generate_nano_banana_art(state["converter_data"]["art_prompt"])
 
             cover_path = create_converter_cover()
-            markup = InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton("✅ Pilih Gambar Ini Sebagai Cover", callback_data="cover_keep"))
-            markup.add(InlineKeyboardButton("🔄 Generate Ulang Kartun 2D", callback_data="cover_cartoon"))
+            send_cover_preview(cover_path)
 
-            with open(cover_path, "rb") as ph:
-                bot.send_photo(TELEGRAM_CHAT_ID, ph, caption="🎨 *Hasil Cover Ilustrasi Kartun 2D*", parse_mode="Markdown", reply_markup=markup)
+        elif data == "cover_upload":
+            state["waiting_for_cover_upload"] = True
+            bot.answer_callback_query(call.id, "Silakan upload foto...")
+            bot.send_message(
+                TELEGRAM_CHAT_ID,
+                "📤 *Silakan kirim/upload FOTO untuk cover sekarang.*\n"
+                "Foto akan otomatis disesuaikan ke format rounded rectangle di cover.",
+                parse_mode="Markdown"
+            )
 
         elif data == "cover_keep":
             bot.answer_callback_query(call.id, "Cover dikunci!")
@@ -761,6 +753,24 @@ def send_caption_review():
     )
     bot.send_message(TELEGRAM_CHAT_ID, f"📝 *REVIEW CAPTION:*\n\n{cap}", parse_mode="Markdown", reply_markup=markup)
 
+# Handler untuk upload FOTO cover sendiri
+@bot.message_handler(content_types=["photo"])
+def handle_user_cover_photo(message):
+    if not state["waiting_for_cover_upload"]:
+        return
+    bot.send_message(TELEGRAM_CHAT_ID, "⏳ Mengunduh foto cover Anda & menyusun ulang desain...")
+    file_info = bot.get_file(message.photo[-1].file_id)
+    downloaded = bot.download_file(file_info.file_path)
+    with open(state["cover_source_img"], "wb") as f:
+        f.write(downloaded)
+
+    state["is_ai_art"] = False
+    state["waiting_for_cover_upload"] = False
+    new_cover = create_converter_cover()
+    bot.send_message(TELEGRAM_CHAT_ID, "✅ *Foto berhasil dipasang pada cover!*", parse_mode="Markdown")
+    send_cover_preview(new_cover)
+
+# Handler untuk upload VIDEO Reels sendiri
 @bot.message_handler(content_types=["video"])
 def handle_user_video(message):
     if not state["waiting_for_video_upload"]:
