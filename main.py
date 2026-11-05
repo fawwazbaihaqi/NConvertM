@@ -239,12 +239,12 @@ def generate_converter_content(article):
     )
     user_txt = f"Judul: {article.title}\nRingkasan: {article.get('summary', '')[:400]}"
 
-    res = groq_client.chat.completions.create(
+   res = groq_client.chat.completions.create(
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_txt}
         ],
-        model="llama-3.3-70b-versatile",
+        model="llama-3.1-8b-instant",  # Model aktif resmi, cepat, dan bebas limit token
         max_tokens=600,
         temperature=0.6
     )
