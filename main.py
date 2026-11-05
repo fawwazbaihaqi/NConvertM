@@ -237,14 +237,16 @@ def generate_converter_content(article):
         "  \"mood_musik\": \"Pilih satu: urgent, somber, upbeat, atau chill\"\n"
         "}"
     )
-    user_txt = f"Judul: {article.title}\nRingkasan: {article.get('summary', '')}"
+    user_txt = f"Judul: {article.title}\nRingkasan: {article.get('summary', '')[:400]}"
 
     res = groq_client.chat.completions.create(
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_txt}
         ],
-        model="qwen/qwen3.8-27b"
+        model="llama-3.3-70b-versatile",  # Kuota token per menit jauh lebih besar dan stabil
+        max_tokens=600,                   # Mengunci output di bawah limit 1000 OTPM
+        temperature=0.6
     )
     raw = re.sub(r"^```json\s*|\s*```$", "", res.choices[0].message.content.strip()).strip()
     return json.loads(raw)
