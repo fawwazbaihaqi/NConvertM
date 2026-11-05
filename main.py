@@ -527,7 +527,7 @@ def draw_centered_video_text(base_img, y_pos, text, font, text_color=(255, 255, 
         mark_part = text[-split_len:] + ("!" if split_len == 1 else "")
         bbox_main = draw.textbbox((0, 0), main_part, font=font)
         mw = bbox_main[2] - bbox_main[0]
-        draw.text((x_pos, y_pos), main_part, font=fill_text := text_color)
+        draw.text((x_pos, y_pos), main_part, font=font, fill=text_color)
         draw.text((x_pos + mw, y_pos), mark_part, font=font, fill=(235, 30, 30, 255))
     else:
         draw.text((x_pos, y_pos), text, font=font, fill=text_color)
@@ -892,10 +892,4 @@ def send_final_package(mp4_path):
         parse_mode="Markdown"
     )
 
-    bot.send_message(TELEGRAM_CHAT_ID, "🎉 *Selesai!* Seluruh paket konten sudah siap di-upload ke Instagram / TikTok.")
-    bot.stop_polling()
-
-if __name__ == "__main__":
-    fetch_articles()
-    send_news_candidate()
-    bot.infinity_polling(timeout=20, long_polling_timeout=10)
+    bot.send_message(TELEGRAM_CHAT_ID, "🎉 *Selesai!* Seluruh paket konten sudah siap di-upload ke Instagram
