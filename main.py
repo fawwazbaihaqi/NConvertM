@@ -4,10 +4,11 @@ import re
 import random
 import urllib.parse
 import subprocess
+from io import BytesIO
 import requests
 import feedparser
 from bs4 import BeautifulSoup
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from groq import Groq
@@ -39,7 +40,6 @@ state = {
     "is_ai_art": False
 }
 
-# Load Font Ubuntu (DejaVuSans-Bold)
 def get_font(size):
     font_paths = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -51,7 +51,7 @@ def get_font(size):
     return ImageFont.load_default()
 
 # ==========================================
-# 2. SCRAPER BERITA & GENERATOR POLLINATIONS AI
+# 2. SCRAPER BERITA & EKSTRAKTOR GAMBAR ASLI
 # ==========================================
 def fetch_articles():
     rss_url = "https://news.google.com/rss/search?q=berita+pendakian&hl=id&gl=ID&ceid=ID:id"
@@ -59,53 +59,103 @@ def fetch_articles():
     state["articles"] = feed.entries
     state["current_idx"] = 0
 
-def extract_article_image(url):
+def extract_article_image(article_entry):
+    """Mengekstrak gambar asli dari artikel berita (RSS summary, Bing News thumb, atau Meta OG)"""
     state["is_ai_art"] = False
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    }
+
+    # Strategi 1: Cek apakah ada tag <img> di dalam ringkasan RSS
+    summary_html = article_entry.get("summary", "")
+    if summary_html:
+        soup_rss = BeautifulSoup(summary_html, "html.parser")
+        rss_img = soup_rss.find("img")
+        if rss_img and rss_img.get("src"):
+            try:
+                r = requests.get(rss_img["src"], headers=headers, timeout=10)
+                img = Image.open(BytesIO(r.content)).convert("RGB")
+                if img.width >= 200:
+                    img.save(state["cover_source_img"])
+                    print("Berhasil mengambil gambar dari RSS feed.")
+                    return True
+            except Exception as e:
+                print(f"Lewati gambar RSS: {e}")
+
+    # Strategi 2: Ikuti redirect link berita dan ambil og:image / twitter:image
     try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        resp = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+        resp = requests.get(article_entry.link, headers=headers, timeout=12, allow_redirects=True)
         soup = BeautifulSoup(resp.text, "html.parser")
-        og_img = soup.find("meta", property="og:image")
-        if og_img and og_img.get("content"):
-            img_data = requests.get(og_img["content"], headers=headers, timeout=10).content
-            with open(state["cover_source_img"], "wb") as f:
-                f.write(img_data)
+        img_url = None
+        for prop in ["og:image", "twitter:image", "image"]:
+            tag = soup.find("meta", property=prop) or soup.find("meta", attrs={"name": prop})
+            if tag and tag.get("content") and "googleusercontent" not in tag.get("content", ""):
+                img_url = tag["content"]
+                break
+
+        if img_url:
+            if img_url.startswith("//"):
+                img_url = "https:" + img_url
+            img_data = requests.get(img_url, headers=headers, timeout=12).content
+            img = Image.open(BytesIO(img_data)).convert("RGB")
+            img.save(state["cover_source_img"])
+            print(f"Berhasil mengambil gambar meta artikel: {img_url}")
             return True
     except Exception as e:
-        print(f"Gagal ambil gambar berita: {e}")
-    
-    # Jika artikel tidak punya foto, otomatis buatkan dengan Pollinations
-    return generate_pollinations_art("Indonesian mountain hiking trail adventure")
+        print(f"Gagal scrape langsung dari URL Google News: {e}")
+
+    # Strategi 3: Cari gambar berita asli berdasarkan judul berita via Bing News Image
+    try:
+        clean_title = article_entry.title.rsplit("-", 1)[0].strip()
+        search_url = f"https://www.bing.com/images/search?q={urllib.parse.quote(clean_title)}&first=1"
+        r_bing = requests.get(search_url, headers=headers, timeout=12)
+        matches = re.findall(r'murl&quot;:&quot;(https?://[^&]+?)&quot;', r_bing.text)
+        for m_url in matches[:3]:
+            try:
+                img_data = requests.get(m_url, headers=headers, timeout=10).content
+                img = Image.open(BytesIO(img_data)).convert("RGB")
+                if img.width >= 300:
+                    img.save(state["cover_source_img"])
+                    print(f"Berhasil mengambil gambar berita terkait: {m_url}")
+                    return True
+            except:
+                continue
+    except Exception as e:
+        print(f"Pencarian gambar berita alternatif gagal: {e}")
+
+    # Fallback Terakhir: Generate Ilustrasi via Pollinations
+    return generate_pollinations_art(article_entry.title)
 
 def generate_pollinations_art(prompt_subject):
-    """
-    Generate Graphic Art Background 9:16 (1080x1920) menggunakan Pollinations (Model Flux)
-    100% Gratis & Tanpa Batas Kuota
-    """
+    """Generate Graphic Art sesuai gaya aplikasi Converter (Dark Editorial Outdoor)"""
     state["is_ai_art"] = True
     try:
         full_prompt = (
-            f"Dramatic editorial graphic art illustration and realistic outdoor photography of Indonesian mountain hiking, "
-            f"{prompt_subject}, misty tropical volcano atmosphere, cinematic moody lighting, "
-            f"vertical 9:16 wallpaper, high detail, no text, no letters, no watermark"
+            f"Editorial outdoor graphic art illustration, mountaineering poster aesthetic, "
+            f"{prompt_subject}, Indonesian volcano peak and misty pine forest, "
+            f"semi-flat vector digital painting, moody dramatic lighting, "
+            f"vertical 9:16 aspect ratio, no text, no watermark, no letters"
         )
         encoded_prompt = urllib.parse.quote(full_prompt)
         seed = random.randint(1000, 999999)
+        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1920&seed={seed}&model=flux&nologo=true"
         
-        image_url = (
-            f"https://image.pollinations.ai/prompt/{encoded_prompt}"
-            f"?width=1080&height=1920&seed={seed}&model=flux&nologo=true"
-        )
-        
-        resp = requests.get(image_url, timeout=45)
+        resp = requests.get(image_url, timeout=40)
         if resp.status_code == 200:
-            with open(state["cover_source_img"], "wb") as f:
-                f.write(resp.content)
+            img = Image.open(BytesIO(resp.content)).convert("RGB")
+            img.save(state["cover_source_img"])
             return True
     except Exception as e:
-        print(f"Error Pollinations AI: {e}")
-    return False
+        print(f"Pollinations error: {e}")
 
+    # Jika internet gagal, buat background warna gelap agar tidak pernah crash
+    img = Image.new("RGB", (1080, 1920), color="#141E19")
+    img.save(state["cover_source_img"])
+    return True
+
+# ==========================================
+# 3. AI CONVERTER & MOOD CLASSIFIER (GROQ)
+# ==========================================
 def generate_converter_content(article):
     system_prompt = (
         "Kamu adalah aplikasi CampersMagz News Converter. "
@@ -120,7 +170,8 @@ def generate_converter_content(article):
         "  \"isi\": \"Rangkuman berita padat, jelas, dan informatif\",\n"
         "  \"kesimpulan\": \"Pengingat keselamatan (safety reminder) bagi pendaki atas berita ini\",\n"
         "  \"sumber_media\": \"Nama media singkat (contoh: detiknews / kompas / antara)\",\n"
-        "  \"art_prompt\": \"Deskripsi visual singkat dalam bahasa Inggris tentang adegan berita ini untuk AI image generator\"\n"
+        "  \"art_prompt\": \"Deskripsi visual singkat dalam bahasa Inggris tentang adegan berita ini\",\n"
+        "  \"mood_musik\": \"Pilih satu kata saja: urgent (untuk SAR/erupsi/bahaya/hilang), somber (untuk duka/kecelakaan/haru), upbeat (untuk event/aksi bersih/info positif), atau chill (untuk edukasi/alam/cuaca)\"\n"
         "}"
     )
     user_txt = f"Judul: {article.title}\nRingkasan: {article.get('summary', '')}"
@@ -149,24 +200,21 @@ def build_formatted_caption():
     )
 
 # ==========================================
-# 3. DESAIN OVERLAY PERSIS REFERENSI VIDEO CAMPERSMAGZ
+# 4. DESAIN OVERLAY (TANPA HIGHLIGHT HITAM)
 # ==========================================
-def draw_centered_shadowed_text(base_img, y_pos, text, font, text_color=(255, 255, 255, 255)):
+def draw_centered_clean_text(base_img, y_pos, text, font, text_color=(255, 255, 255, 255)):
+    """Menggambar teks rata tengah bersih TANPA highlight/kotak hitam"""
     W, H = base_img.size
-    shadow_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    s_draw = ImageDraw.Draw(shadow_layer)
+    draw = ImageDraw.Draw(base_img)
     
-    bbox = s_draw.textbbox((0, 0), text, font=font)
+    bbox = draw.textbbox((0, 0), text, font=font)
     tw = bbox[2] - bbox[0]
     x_pos = (W - tw) // 2
 
-    for offset_x in range(-4, 5, 2):
-        for offset_y in range(-4, 5, 2):
-            s_draw.text((x_pos + offset_x, y_pos + offset_y + 4), text, font=font, fill=(0, 0, 0, 190))
-    shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=6))
-    base_img.alpha_composite(shadow_layer)
+    # Outline tipis 2px agar huruf tetap terbaca tanpa blok highlight hitam
+    for ox, oy in [(-2, 0), (2, 0), (0, -2), (0, 2)]:
+        draw.text((x_pos + ox, y_pos + oy), text, font=font, fill=(0, 0, 0, 140))
 
-    draw = ImageDraw.Draw(base_img)
     if text.endswith("!!") or text.endswith("!?"):
         main_part = text[:-2]
         mark_part = text[-2:]
@@ -201,7 +249,7 @@ def create_campersmagz_overlay(is_transparent_for_video=False, custom_source=Non
 
     draw = ImageDraw.Draw(canvas)
 
-    # 1. LOGO ATAS (Bulan Sabit & Gunung di Y=120)
+    # 1. Logo Atas
     if os.path.exists("logo_top.png"):
         l_top = Image.open("logo_top.png").convert("RGBA")
         l_top.thumbnail((115, 115), Image.Resampling.LANCZOS)
@@ -214,7 +262,7 @@ def create_campersmagz_overlay(is_transparent_for_video=False, custom_source=Non
         draw.ellipse([W//2 - 45, 120, W//2 + 45, 210], outline=(255, 255, 255, 240), width=6)
         draw.polygon([(W//2 - 22, 190), (W//2, 150), (W//2 + 22, 190)], fill=(255, 255, 255, 240))
 
-    # 2. JUDUL BERITA DI ATAS-TENGAH (Y=295)
+    # 2. Judul Berita
     font_title = get_font(52)
     judul = state["selected_title"].strip()
     words = judul.split()
@@ -229,61 +277,110 @@ def create_campersmagz_overlay(is_transparent_for_video=False, custom_source=Non
 
     y_title = 295
     for line in lines[:3]:
-        draw_centered_shadowed_text(canvas, y_title, line, font_title)
+        draw_centered_clean_text(canvas, y_title, line, font_title)
         y_title += 74
 
-    # 3. TEKS SUMBER & WATERMARK CAMPERSMAGZ DI BAWAH (Y=1730 & Y=1775)
+    # 3. Sumber & Watermark Bawah
     font_source = get_font(27)
     font_brand = get_font(42)
 
     if custom_source:
         sumber_label = custom_source
     elif state["is_ai_art"]:
-        sumber_label = f"Ilustrasi AI | Sumber: {state['converter_data']['sumber_media']}"
+        sumber_label = f"Ilustrasi | Sumber: {state['converter_data']['sumber_media']}"
     else:
         sumber_label = f"Foto: {state['converter_data']['sumber_media']}"
 
-    draw_centered_shadowed_text(canvas, 1730, sumber_label, font_source, (240, 240, 240, 255))
+    draw_centered_clean_text(canvas, 1730, sumber_label, font_source, (240, 240, 240, 255))
 
     if os.path.exists("logo_bottom.png"):
         l_bot = Image.open("logo_bottom.png").convert("RGBA")
         l_bot.thumbnail((340, 80), Image.Resampling.LANCZOS)
         canvas.alpha_composite(l_bot, ((W - l_bot.width) // 2, 1775))
     else:
-        draw_centered_shadowed_text(canvas, 1775, "CAMPERSMAGZ", font_brand, (255, 255, 255, 255))
+        draw_centered_clean_text(canvas, 1775, "CAMPERSMAGZ", font_brand, (255, 255, 255, 255))
 
     out_path = "overlay_frame.png" if is_transparent_for_video else state["final_cover_img"]
     canvas.save(out_path)
     return out_path
 
 # ==========================================
-# 4. RENDER VIDEO FULL-SCREEN 9:16 DENGAN FFMPEG
+# 5. METODE 1: GENERATOR AUDIO MOOD & FFMPEG
 # ==========================================
+def prepare_mood_audio(mood="chill", duration=12):
+    """
+    Metode 1: Menggunakan file MP3 mood jika ada, atau men-generate 
+    instrumental ambient sesuai mood berita dengan synthesizer FFmpeg.
+    """
+    mood = str(mood).lower().strip()
+    if mood not in ["urgent", "somber", "upbeat", "chill"]:
+        mood = "chill"
+
+    custom_file = f"bgm_{mood}.mp3"
+    if os.path.exists(custom_file):
+        print(f"Menggunakan file musik suasana: {custom_file}")
+        return custom_file
+    elif os.path.exists("bgm.mp3"):
+        print("Menggunakan bgm.mp3 bawaan.")
+        return "bgm.mp3"
+
+    output_audio = f"synth_{mood}.mp3"
+    print(f"Men-generate sound instrumental otomatis untuk suasana: {mood.upper()}...")
+
+    if mood == "urgent":
+        # Suasana Tegang / SAR / Erupsi (Minor Pulsing Drone)
+        expr = "0.25*sin(2*PI*110*t)+0.15*sin(2*PI*130.81*t)+0.12*sin(2*PI*164.81*t)*(1+0.6*sin(2*PI*2.5*t))"
+    elif mood == "somber":
+        # Suasana Sedih / Evakuasi / Duka (Deep Slow Minor)
+        expr = "0.25*sin(2*PI*98*t)+0.15*sin(2*PI*116.54*t)+0.15*sin(2*PI*146.83*t)"
+    elif mood == "upbeat":
+        # Suasana Positif / Event / Jalur Buka (Warm Major)
+        expr = "0.2*sin(2*PI*261.63*t)+0.15*sin(2*PI*329.63*t)+0.15*sin(2*PI*392.00*t)"
+    else:
+        # Suasana Chill / Edukasi / Alam (Atmospheric Pad)
+        expr = "0.2*sin(2*PI*174.61*t)+0.15*sin(2*PI*220*t)+0.15*sin(2*PI*261.63*t)"
+
+    cmd = [
+        "ffmpeg", "-y", "-f", "lavfi",
+        "-i", f"aevalsrc={expr}:s=44100:d={duration}",
+        "-af", "lowpass=f=1000",
+        output_audio
+    ]
+    subprocess.run(cmd, check=True)
+    return output_audio
+
 def render_final_video(mode="pan_image", add_instrumental=True):
+    print("========================================")
+    print("MEMULAI RENDERING VIDEO FFMPEG...")
+    print("========================================")
+
     overlay_png = create_campersmagz_overlay(
         is_transparent_for_video=True,
         custom_source=state["custom_source_text"] if mode == "user_video" else None
     )
     output_mp4 = "final_campersmagz_reel.mp4"
-    has_bgm = os.path.exists("bgm.mp3") and add_instrumental
+
+    mood_berita = state["converter_data"].get("mood_musik", "chill")
+    bgm_path = prepare_mood_audio(mood=mood_berita, duration=15) if add_instrumental else None
+    has_bgm = (bgm_path is not None and os.path.exists(bgm_path))
 
     if mode == "pan_image":
-        # Perlebar sedikit ke 1350x1920 lalu pan halus kiri-ke-kanan 1080x1920 selama 5 detik
+        # Pan kiri ke kanan selama 5 detik (TANPA tanda kutip tunggal di dalam filter agar tidak error di Linux)
         vf_filter = (
             "[0:v]scale=1350:1920:force_original_aspect_ratio=increase,"
-            "crop=1080:1920:'(iw-ow)*t/5':(ih-oh)/2[bg];"
+            "crop=1080:1920:(iw-ow)*t/5:(ih-oh)/2[bg];"
             "[bg][1:v]overlay=0:0[outv]"
         )
         cmd = ["ffmpeg", "-y", "-loop", "1", "-t", "5", "-i", state["cover_source_img"], "-i", overlay_png]
         if has_bgm:
             cmd += [
-                "-i", "bgm.mp3",
+                "-i", bgm_path,
                 "-filter_complex", vf_filter + ";[2:a]afade=t=out:st=3.5:d=1.5[outa]",
                 "-map", "[outv]", "-map", "[outa]"
             ]
         else:
             cmd += ["-filter_complex", vf_filter, "-map", "[outv]"]
-        cmd += ["-t", "5", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-shortest", output_mp4]
+        cmd += ["-t", "5", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-shortest", output_mp4]
 
     else:
         probe = subprocess.run(
@@ -293,8 +390,15 @@ def render_final_video(mode="pan_image", add_instrumental=True):
         try:
             dur = float(probe.stdout.strip())
         except:
-            dur = 10.0
-        fade_start = max(0, dur - 2.0)
+            dur = 8.0
+        fade_start = max(0.5, dur - 2.0)
+
+        # Cek apakah video yang diupload punya track audio asli
+        probe_audio = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", state["uploaded_video_path"]],
+            capture_output=True, text=True
+        )
+        video_has_audio = bool(probe_audio.stdout.strip())
 
         vf_filter = (
             "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
@@ -303,20 +407,40 @@ def render_final_video(mode="pan_image", add_instrumental=True):
         )
         cmd = ["ffmpeg", "-y", "-i", state["uploaded_video_path"], "-i", overlay_png]
         if has_bgm:
-            cmd += [
-                "-i", "bgm.mp3",
-                "-filter_complex", f"{vf_filter};[2:a]afade=t=out:st={fade_start}:d=2[bgm];[0:a][bgm]amix=inputs=2:duration=first[outa]",
-                "-map", "[outv]", "-map", "[outa]"
-            ]
+            bgm_Path_actual = prepare_mood_audio(mood=mood_berita, duration=int(dur) + 3)
+            cmd += ["-i", bgm_Path_actual]
+            if video_has_audio:
+                cmd += [
+                    "-filter_complex", f"{vf_filter};[2:a]afade=t=out:st={fade_start}:d=2[bgm];[0:a][bgm]amix=inputs=2:duration=first[outa]",
+                    "-map", "[outv]", "-map", "[outa]"
+                ]
+            else:
+                cmd += [
+                    "-filter_complex", f"{vf_filter};[2:a]afade=t=out:st={fade_start}:d=2[outa]",
+                    "-map", "[outv]", "-map", "[outa]"
+                ]
         else:
-            cmd += ["-filter_complex", vf_filter, "-map", "[outv]", "-map", "0:a?"]
-        cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-shortest", output_mp4]
+            cmd += ["-filter_complex", vf_filter, "-map", "[outv]"]
+            if video_has_audio:
+                cmd += ["-map", "0:a"]
 
-    subprocess.run(cmd, check=True)
+        cmd += ["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-shortest", output_mp4]
+
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    for line in process.stdout:
+        print(line, end="")
+    process.wait()
+
+    if process.returncode != 0:
+        raise RuntimeError("FFmpeg gagal merender video.")
+
+    print("========================================")
+    print("VIDEO SELESAI DIRENDER!")
+    print("========================================")
     return output_mp4
 
 # ==========================================
-# 5. HANDLER INTERAKTIF TELEGRAM
+# 6. HANDLER INTERAKTIF TELEGRAM
 # ==========================================
 def send_news_candidate():
     if state["current_idx"] >= len(state["articles"]):
@@ -337,92 +461,101 @@ def send_news_candidate():
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
-    data = call.data
+    try:
+        data = call.data
 
-    if data == "news_next":
-        state["current_idx"] += 1
-        bot.answer_callback_query(call.id, "Mencari berita lain...")
-        send_news_candidate()
+        if data == "news_next":
+            state["current_idx"] += 1
+            bot.answer_callback_query(call.id, "Mencari berita lain...")
+            send_news_candidate()
 
-    elif data == "news_accept":
-        bot.answer_callback_query(call.id, "Memproses draf...")
-        bot.send_message(TELEGRAM_CHAT_ID, "⏳ Mengambil gambar berita & menyusun draf CampersMagz...")
-        
-        extract_article_image(state["article"].link)
-        state["converter_data"] = generate_converter_content(state["article"])
-        state["selected_title"] = state["converter_data"]["opsi_judul"][0]
-        
-        cover_path = create_campersmagz_overlay(is_transparent_for_video=False)
-        
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("🖼️ Pilih Gambar Ini Sebagai Cover", callback_data="cover_keep"))
-        markup.add(InlineKeyboardButton("🎨 Generate Cover dengan Pollinations AI", callback_data="cover_pollinations"))
-        
-        with open(cover_path, "rb") as ph:
-            bot.send_photo(TELEGRAM_CHAT_ID, ph, caption="📌 *Preview Cover dari Gambar Berita*", parse_mode="Markdown", reply_markup=markup)
+        elif data == "news_accept":
+            bot.answer_callback_query(call.id, "Memproses draf...")
+            bot.send_message(TELEGRAM_CHAT_ID, "⏳ Mengambil gambar asli berita & menganalisis suasana berita...")
+            
+            extract_article_image(state["article"])
+            state["converter_data"] = generate_converter_content(state["article"])
+            state["selected_title"] = state["converter_data"]["opsi_judul"][0]
+            
+            cover_path = create_campersmagz_overlay(is_transparent_for_video=False)
+            mood_terdeteksi = state["converter_data"].get("mood_musik", "chill").upper()
+            
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("🖼️ Pilih Gambar Ini Sebagai Cover", callback_data="cover_keep"))
+            markup.add(InlineKeyboardButton("🎨 Generate Cover Graphic Art (Converter)", callback_data="cover_pollinations"))
+            
+            with open(cover_path, "rb") as ph:
+                bot.send_photo(
+                    TELEGRAM_CHAT_ID, ph,
+                    caption=f"📌 *Preview Cover Berita*\n🎵 Suasana Musik Terdeteksi: `{mood_terdeteksi}`",
+                    parse_mode="Markdown", reply_markup=markup
+                )
 
-    elif data == "cover_pollinations":
-        bot.answer_callback_query(call.id, "Menjalankan Pollinations Flux AI...")
-        bot.send_message(TELEGRAM_CHAT_ID, "🎨 Sedang membuat Graphic Art Background 9:16 dengan Pollinations AI...")
-        ok = generate_pollinations_art(state["converter_data"]["art_prompt"])
-        if not ok:
-            bot.send_message(TELEGRAM_CHAT_ID, "⚠️ Gagal memanggil server gambar, silakan coba klik ulang.")
-        
-        cover_path = create_campersmagz_overlay(is_transparent_for_video=False)
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("✅ Pilih Gambar Ini Sebagai Cover", callback_data="cover_keep"))
-        markup.add(InlineKeyboardButton("🔄 Generate Ulang Pollinations AI", callback_data="cover_pollinations"))
-        
-        with open(cover_path, "rb") as ph:
-            bot.send_photo(TELEGRAM_CHAT_ID, ph, caption="🎨 *Hasil Graphic Art Pollinations AI*", parse_mode="Markdown", reply_markup=markup)
+        elif data == "cover_pollinations":
+            bot.answer_callback_query(call.id, "Membuat Graphic Art...")
+            bot.send_message(TELEGRAM_CHAT_ID, "🎨 Sedang merender Graphic Art Background...")
+            generate_pollinations_art(state["converter_data"]["art_prompt"])
+            
+            cover_path = create_campersmagz_overlay(is_transparent_for_video=False)
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("✅ Pilih Gambar Ini Sebagai Cover", callback_data="cover_keep"))
+            markup.add(InlineKeyboardButton("🔄 Generate Ulang Graphic Art", callback_data="cover_pollinations"))
+            
+            with open(cover_path, "rb") as ph:
+                bot.send_photo(TELEGRAM_CHAT_ID, ph, caption="🎨 *Hasil Graphic Art Cover*", parse_mode="Markdown", reply_markup=markup)
 
-    elif data == "cover_keep":
-        bot.answer_callback_query(call.id, "Cover dikunci!")
-        send_title_options()
+        elif data == "cover_keep":
+            bot.answer_callback_query(call.id, "Cover dikunci!")
+            send_title_options()
 
-    elif data.startswith("title_"):
-        idx = int(data.split("_")[1])
-        state["selected_title"] = state["converter_data"]["opsi_judul"][idx]
-        create_campersmagz_overlay(is_transparent_for_video=False)
-        bot.answer_callback_query(call.id, "Judul ditetapkan!")
-        send_caption_review()
+        elif data.startswith("title_"):
+            idx = int(data.split("_")[1])
+            state["selected_title"] = state["converter_data"]["opsi_judul"][idx]
+            create_campersmagz_overlay(is_transparent_for_video=False)
+            bot.answer_callback_query(call.id, "Judul ditetapkan!")
+            send_caption_review()
 
-    elif data == "cap_regen":
-        bot.answer_callback_query(call.id, "Membuat caption lain...")
-        state["converter_data"] = generate_converter_content(state["article"])
-        send_caption_review()
+        elif data == "cap_regen":
+            bot.answer_callback_query(call.id, "Membuat caption lain...")
+            state["converter_data"] = generate_converter_content(state["article"])
+            send_caption_review()
 
-    elif data == "cap_keep":
-        bot.answer_callback_query(call.id, "Caption dikunci!")
-        markup = InlineKeyboardMarkup()
-        markup.row(
-            InlineKeyboardButton("🎞️ Tidak Upload Video (Pan 5s)", callback_data="vid_no_upload"),
-            InlineKeyboardButton("📤 Upload Video", callback_data="vid_upload")
-        )
-        bot.send_message(TELEGRAM_CHAT_ID, "🎬 *PILIH OPSI VIDEO:*", parse_mode="Markdown", reply_markup=markup)
+        elif data == "cap_keep":
+            bot.answer_callback_query(call.id, "Caption dikunci!")
+            markup = InlineKeyboardMarkup()
+            markup.row(
+                InlineKeyboardButton("🎞️ Tidak Upload Video (Pan 5s)", callback_data="vid_no_upload"),
+                InlineKeyboardButton("📤 Upload Video", callback_data="vid_upload")
+            )
+            bot.send_message(TELEGRAM_CHAT_ID, "🎬 *PILIH OPSI PEMBUATAN VIDEO:*", parse_mode="Markdown", reply_markup=markup)
 
-    elif data == "vid_no_upload":
-        bot.answer_callback_query(call.id, "Merender video 5 detik...")
-        bot.send_message(TELEGRAM_CHAT_ID, "⚙️ Merender video Panning 5 detik + Audio Instrumental (Fade Out)...")
-        mp4 = render_final_video(mode="pan_image", add_instrumental=True)
-        send_final_package(mp4)
+        elif data == "vid_no_upload":
+            bot.answer_callback_query(call.id, "Merender video 5 detik...")
+            mood = state["converter_data"].get("mood_musik", "chill").upper()
+            bot.send_message(TELEGRAM_CHAT_ID, f"⚙️ Merender video Pan 5 detik + Audio Instrumental (`{mood}`) dengan Fade Out...")
+            mp4 = render_final_video(mode="pan_image", add_instrumental=True)
+            send_final_package(mp4)
 
-    elif data == "vid_upload":
-        state["waiting_for_video_upload"] = True
-        bot.answer_callback_query(call.id, "Silakan upload video...")
-        bot.send_message(
-            TELEGRAM_CHAT_ID,
-            "📤 *Silakan upload video Anda sekarang.*\n"
-            "Tulis sumbernya di bagian *Caption* saat mengirim video (contoh: `tiktok/gabriel_iqbal` atau `instagram/btn_gn_rinjani`).",
-            parse_mode="Markdown"
-        )
+        elif data == "vid_upload":
+            state["waiting_for_video_upload"] = True
+            bot.answer_callback_query(call.id, "Silakan upload video...")
+            bot.send_message(
+                TELEGRAM_CHAT_ID,
+                "📤 *Silakan upload video Anda sekarang.*\n"
+                "Tulis sumbernya di bagian *Caption* saat mengirim video (contoh: `tiktok/gabriel_iqbal`).",
+                parse_mode="Markdown"
+            )
 
-    elif data in ["bgm_yes", "bgm_no"]:
-        add_bgm = (data == "bgm_yes")
-        bot.answer_callback_query(call.id, "Merender video...")
-        bot.send_message(TELEGRAM_CHAT_ID, "⚙️ Mengedit video sesuai layout CampersMagz...")
-        mp4 = render_final_video(mode="user_video", add_instrumental=add_bgm)
-        send_final_package(mp4)
+        elif data in ["bgm_yes", "bgm_no"]:
+            add_bgm = (data == "bgm_yes")
+            bot.answer_callback_query(call.id, "Mengedit video...")
+            bot.send_message(TELEGRAM_CHAT_ID, "⚙️ Sedang mengedit video dengan FFmpeg...")
+            mp4 = render_final_video(mode="user_video", add_instrumental=add_bgm)
+            send_final_package(mp4)
+
+    except Exception as e:
+        print(f"Error pada callback: {e}")
+        bot.send_message(TELEGRAM_CHAT_ID, f"⚠️ Terjadi kendala teknis: `{e}`", parse_mode="Markdown")
 
 def send_title_options():
     markup = InlineKeyboardMarkup()
@@ -458,9 +591,10 @@ def handle_user_video(message):
     state["custom_source_text"] = sumber_raw
     state["waiting_for_video_upload"] = False
 
+    mood = state["converter_data"].get("mood_musik", "chill").upper()
     markup = InlineKeyboardMarkup()
     markup.row(
-        InlineKeyboardButton("🎵 Isi Suara Instrumental", callback_data="bgm_yes"),
+        InlineKeyboardButton(f"🎵 Isi Suara Instrumental ({mood})", callback_data="bgm_yes"),
         InlineKeyboardButton("🔇 Tidak Isi Suara Instrumental", callback_data="bgm_no")
     )
     bot.send_message(TELEGRAM_CHAT_ID, "🎶 *Pilih opsi audio untuk video ini:*", parse_mode="Markdown", reply_markup=markup)
@@ -471,7 +605,7 @@ def send_final_package(mp4_path):
         bot.send_photo(TELEGRAM_CHAT_ID, cov, caption="✅ *COVER REELS SIAP UPLOAD*", parse_mode="Markdown")
     with open(mp4_path, "rb") as vid:
         bot.send_video(TELEGRAM_CHAT_ID, vid, caption=cap, parse_mode="Markdown")
-    bot.send_message(TELEGRAM_CHAT_ID, "🎉 *Selesai!* Video, Cover, dan Caption sudah sesuai standar CampersMagz.")
+    bot.send_message(TELEGRAM_CHAT_ID, "🎉 *Selesai!* Video, Cover, Audio Mood, dan Caption siap diposting.")
     bot.stop_polling()
 
 if __name__ == "__main__":
