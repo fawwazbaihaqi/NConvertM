@@ -12,22 +12,27 @@ from bs4 import BeautifulSoup
 from PIL import Image, ImageDraw, ImageFont
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from groq import Groq
+from openai import OpenAI
 from google import genai
 
 # ==========================================
 # 1. KONFIGURASI API & SECRETS
 # ==========================================
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+GH_TOKEN = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-if not all([GROQ_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
-    raise ValueError("Pastikan GROQ_API_KEY, TELEGRAM_BOT_TOKEN, dan TELEGRAM_CHAT_ID sudah disetel di Secrets!")
+if not all([GH_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
+    raise ValueError("Pastikan GH_TOKEN, TELEGRAM_BOT_TOKEN, dan TELEGRAM_CHAT_ID sudah disetel di Secrets!")
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
-groq_client = Groq(api_key=GROQ_API_KEY)
+
+# Client GitHub Models menggunakan endpoint Azure AI
+ai_client = OpenAI(
+    base_url="https://models.inference.ai.azure.com",
+    api_key=GH_TOKEN
+)
 genai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 state = {
@@ -207,6 +212,7 @@ def generate_nano_banana_art(prompt_subject):
             if part.inline_data:
                 img = Image.open(BytesIO(part.inline_data.data)).convert("RGB")
                 img.save(state["cover_source_img"])
+                print("Berhasil membuat gambar dengan Nano Banana!")
                 return True
     except Exception as e:
         print(f"Error Nano Banana: {e}")
@@ -216,12 +222,12 @@ def generate_nano_banana_art(prompt_subject):
     return False
 
 # ==========================================
-# 4. KONTEN DRAF BERITA (LLAMA 3.3 70B - ANTI LIMIT 429)
+# 4. KONTEN DRAF BERITA (GITHUB MODELS - GPT-4O-MINI)
 # ==========================================
 def generate_converter_content(article):
     system_prompt = (
         "Kamu adalah aplikasi CampersMagz News Converter. "
-        "Analisis berita dan hasilkan JSON murni TANPA markdown backtick dengan struktur:\n"
+        "Analisis berita dan hasilkan JSON murni TANPA markdown backtick dengan format persis:\n"
         "{\n"
         "  \"kata_kunci_utama\": \"Nama gunung atau subjek utama maksimal 2-3 kata (contoh: Arjuno / Welirang / Semeru)\",\n"
         "  \"opsi_judul\": [\n"
@@ -237,35 +243,24 @@ def generate_converter_content(article):
         "  \"mood_musik\": \"Pilih satu: urgent, somber, upbeat, atau chill\"\n"
         "}"
     )
-    user_txt = f"Judul: {article.title}\nRingkasan: {article.get('summary', '')[:300]}"
+    user_txt = f"Judul: {article.title}\nRingkasan: {article.get('summary', '')[:400]}"
 
-    # Prioritas 1: Gunakan Groq Qwen dengan kunci max_tokens=350 (bebas limit 429)
     try:
-        res = groq_client.chat.completions.create(
+        response = ai_client.chat.completions.create(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_txt}
             ],
-            model="qwen/qwen3.8-27b",
-            max_tokens=350,
-            temperature=0.5
+            model="gpt-4o-mini",
+            response_format={"type": "json_object"},
+            temperature=0.4
         )
-        raw = re.sub(r"^```json\s*|\s*```$", "", res.choices[0].message.content.strip()).strip()
+        raw = response.choices[0].message.content.strip()
+        raw = re.sub(r"^```json\s*|\s*```$", "", raw).strip()
         return json.loads(raw)
     except Exception as e:
-        print(f"Groq kendala ({e}), beralih otomatis ke Gemini Flash...")
-
-    # Prioritas 2: Fallback ke Gemini Flash jika Groq sedang bermasalah
-    if genai_client:
-        full_prompt = f"{system_prompt}\n\nBerita:\n{user_txt}"
-        res = genai_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=full_prompt
-        )
-        raw = re.sub(r"^```json\s*|\s*```$", "", res.text.strip()).strip()
-        return json.loads(raw)
-
-    raise RuntimeError("Gagal memproses draf berita dari Groq maupun Gemini.")
+        print(f"Error GitHub Models: {e}")
+        raise RuntimeError(f"Gagal memproses draf berita dari GitHub Models: {e}")
 
 def build_full_article_text():
     d = state["converter_data"]
@@ -811,7 +806,6 @@ def handle_user_video(message):
     )
     bot.send_message(TELEGRAM_CHAT_ID, "🎶 *Pilih opsi audio untuk video ini:*", parse_mode="Markdown", reply_markup=markup)
 
-# Pengiriman hasil akhir: Caption singkat pada video, teks artikel lengkap dikirim di chat
 def send_final_package(mp4_path):
     full_text = build_full_article_text()
     judul = state["selected_title"]
@@ -819,7 +813,6 @@ def send_final_package(mp4_path):
     with open(state["final_cover_img"], "rb") as cov:
         bot.send_photo(TELEGRAM_CHAT_ID, cov, caption="✅ *COVER FINAL (FORMAT CONVERTER)*", parse_mode="Markdown")
 
-    # Caption video dibuat ringkas di bawah batas 1024 karakter Telegram
     video_caption = (
         f"⛺ *{judul}*\n\n"
         f"🔗 Sumber: {state['converter_data']['sumber_media']}\n"
@@ -829,7 +822,6 @@ def send_final_package(mp4_path):
     with open(mp4_path, "rb") as vid:
         bot.send_video(TELEGRAM_CHAT_ID, vid, caption=video_caption, parse_mode="Markdown")
 
-    # Mengirim draf caption artikel lengkap sebagai pesan teks terpisah
     bot.send_message(
         TELEGRAM_CHAT_ID,
         f"📝 *DRAF CAPTION LENGKAP UNTUK POSTING:*\n(Salin teks di bawah ini)\n\n{full_text}",
