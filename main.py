@@ -223,7 +223,7 @@ def generate_converter_content(article):
         "Kamu adalah aplikasi CampersMagz News Converter. "
         "Analisis berita dan hasilkan JSON murni TANPA markdown backtick dengan struktur:\n"
         "{\n"
-        "  \"kata_kunci_utama\": \"Nama gunung atau subjek utama maksimal 2-3 kata (contoh: Arjuno / Gunung Wilis / Semeru)\",\n"
+        "  \"kata_kunci_utama\": \"Nama gunung atau subjek utama maksimal 2-3 kata (contoh: Arjuno / Welirang / Semeru)\",\n"
         "  \"opsi_judul\": [\n"
         "    \"Judul Singkat 1 (7-10 kata, diakhiri !)\",\n"
         "    \"Judul Singkat 2 (7-10 kata, diakhiri !)\",\n"
@@ -237,19 +237,35 @@ def generate_converter_content(article):
         "  \"mood_musik\": \"Pilih satu: urgent, somber, upbeat, atau chill\"\n"
         "}"
     )
-    user_txt = f"Judul: {article.title}\nRingkasan: {article.get('summary', '')[:400]}"
+    user_txt = f"Judul: {article.title}\nRingkasan: {article.get('summary', '')[:300]}"
 
-    res = groq_client.chat.completions.create(
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_txt}
-        ],
-        model="llama-3.1-8b-instant",
-        max_tokens=600,
-        temperature=0.6
-    )
-    raw = re.sub(r"^```json\s*|\s*```$", "", res.choices[0].message.content.strip()).strip()
-    return json.loads(raw)
+    # Prioritas 1: Gunakan Groq Qwen dengan kunci max_tokens=350 (bebas limit 429)
+    try:
+        res = groq_client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_txt}
+            ],
+            model="qwen/qwen3.8-27b",
+            max_tokens=350,
+            temperature=0.5
+        )
+        raw = re.sub(r"^```json\s*|\s*```$", "", res.choices[0].message.content.strip()).strip()
+        return json.loads(raw)
+    except Exception as e:
+        print(f"Groq kendala ({e}), beralih otomatis ke Gemini Flash...")
+
+    # Prioritas 2: Fallback ke Gemini Flash jika Groq sedang bermasalah
+    if genai_client:
+        full_prompt = f"{system_prompt}\n\nBerita:\n{user_txt}"
+        res = genai_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=full_prompt
+        )
+        raw = re.sub(r"^```json\s*|\s*```$", "", res.text.strip()).strip()
+        return json.loads(raw)
+
+    raise RuntimeError("Gagal memproses draf berita dari Groq maupun Gemini.")
 
 def build_full_article_text():
     d = state["converter_data"]
