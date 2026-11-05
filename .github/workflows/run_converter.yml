@@ -1,13 +1,15 @@
-name: CampersMagz Auto Converter
+name: CampersMagz News Converter
 
 on:
   schedule:
+    # Berjalan otomatis setiap 2 jam sekali (UTC 00:00, 02:00, dst.)
     - cron: '0 */2 * * *'
-  workflow_dispatch:
+  workflow_dispatch: # Tombol manual "Run workflow" di tab Actions
 
 jobs:
   run-converter:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -15,12 +17,13 @@ jobs:
       - name: Install System Fonts & FFmpeg
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-dejavu-core
+          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Install Dependencies
         run: |
@@ -28,17 +31,9 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run Python Script
-        timeout-minutes: 25
         env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python main.py
-
-
-          env:
-  GH_TOKEN: ${{ secrets.GH_TOKEN }}
-  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-  TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python main.py
