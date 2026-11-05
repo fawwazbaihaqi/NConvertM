@@ -216,7 +216,7 @@ def generate_nano_banana_art(prompt_subject):
     return False
 
 # ==========================================
-# 4. KONTEN DRAF BERITA (GROQ)
+# 4. KONTEN DRAF BERITA (LLAMA 3.3 70B - ANTI LIMIT 429)
 # ==========================================
 def generate_converter_content(article):
     system_prompt = (
@@ -229,9 +229,9 @@ def generate_converter_content(article):
         "    \"Judul Singkat 2 (7-10 kata, diakhiri !)\",\n"
         "    \"Judul Singkat 3 (7-10 kata, diakhiri !?)\"\n"
         "  ],\n"
-        "  \"intro\": \"1-2 kalimat pembuka yang relevan bagi pendaki\",\n"
-        "  \"isi\": \"Rangkuman berita padat, jelas, dan informatif\",\n"
-        "  \"kesimpulan\": \"Pengingat keselamatan (safety reminder) bagi pendaki atas berita ini\",\n"
+        "  \"intro\": \"1-2 kalimat pembuka padat bagi pendaki\",\n"
+        "  \"isi\": \"Rangkuman berita padat dan jelas (maksimal 2 paragraf pendek)\",\n"
+        "  \"kesimpulan\": \"Pengingat keselamatan (safety reminder) singkat\",\n"
         "  \"sumber_media\": \"Domain media singkat (contoh: kompas.com / detik.com)\",\n"
         "  \"art_prompt\": \"Deskripsi adegan kartun 2D singkat bahasa Inggris tentang berita ini\",\n"
         "  \"mood_musik\": \"Pilih satu: urgent, somber, upbeat, atau chill\"\n"
@@ -244,14 +244,14 @@ def generate_converter_content(article):
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_txt}
         ],
-        model="llama-3.3-70b-versatile",  # Kuota token per menit jauh lebih besar dan stabil
-        max_tokens=600,                   # Mengunci output di bawah limit 1000 OTPM
+        model="llama-3.3-70b-versatile",
+        max_tokens=600,
         temperature=0.6
     )
     raw = re.sub(r"^```json\s*|\s*```$", "", res.choices[0].message.content.strip()).strip()
     return json.loads(raw)
 
-def build_formatted_caption():
+def build_full_article_text():
     d = state["converter_data"]
     judul = state["selected_title"]
     link = state["article"].link
@@ -260,7 +260,7 @@ def build_formatted_caption():
         f"{d['intro']}\n\n"
         f"{d['isi']}\n\n"
         f"⚠️ *PENGINGAT PENDAKI:*\n{d['kesimpulan']}\n\n"
-        f"🔗 Sumber: {d['sumber_media']} ({link})\n"
+        f"🔗 Sumber: {d['sumber_media']} ({link})\n\n"
         f"#CampersMagz #InfoGunung #PendakiIndonesia #SafetyHiking"
     )
 
@@ -747,7 +747,7 @@ def send_title_options():
     bot.send_message(TELEGRAM_CHAT_ID, txt, parse_mode="Markdown", reply_markup=markup)
 
 def send_caption_review():
-    cap = build_formatted_caption()
+    cap = build_full_article_text()
     markup = InlineKeyboardMarkup()
     markup.row(
         InlineKeyboardButton("✅ Pilih Caption Ini", callback_data="cap_keep"),
@@ -755,7 +755,6 @@ def send_caption_review():
     )
     bot.send_message(TELEGRAM_CHAT_ID, f"📝 *REVIEW CAPTION:*\n\n{cap}", parse_mode="Markdown", reply_markup=markup)
 
-# Handler untuk upload FOTO cover sendiri
 @bot.message_handler(content_types=["photo"])
 def handle_user_cover_photo(message):
     if not state["waiting_for_cover_upload"]:
@@ -772,7 +771,6 @@ def handle_user_cover_photo(message):
     bot.send_message(TELEGRAM_CHAT_ID, "✅ *Foto berhasil dipasang pada cover!*", parse_mode="Markdown")
     send_cover_preview(new_cover)
 
-# Handler untuk upload VIDEO Reels sendiri
 @bot.message_handler(content_types=["video"])
 def handle_user_video(message):
     if not state["waiting_for_video_upload"]:
@@ -797,13 +795,32 @@ def handle_user_video(message):
     )
     bot.send_message(TELEGRAM_CHAT_ID, "🎶 *Pilih opsi audio untuk video ini:*", parse_mode="Markdown", reply_markup=markup)
 
+# Pengiriman hasil akhir: Caption singkat pada video, teks artikel lengkap dikirim di chat
 def send_final_package(mp4_path):
-    cap = build_formatted_caption()
+    full_text = build_full_article_text()
+    judul = state["selected_title"]
+
     with open(state["final_cover_img"], "rb") as cov:
         bot.send_photo(TELEGRAM_CHAT_ID, cov, caption="✅ *COVER FINAL (FORMAT CONVERTER)*", parse_mode="Markdown")
+
+    # Caption video dibuat ringkas di bawah batas 1024 karakter Telegram
+    video_caption = (
+        f"⛺ *{judul}*\n\n"
+        f"🔗 Sumber: {state['converter_data']['sumber_media']}\n"
+        f"#CampersMagz #InfoGunung #PendakiIndonesia #SafetyHiking"
+    )
+
     with open(mp4_path, "rb") as vid:
-        bot.send_video(TELEGRAM_CHAT_ID, vid, caption=cap, parse_mode="Markdown")
-    bot.send_message(TELEGRAM_CHAT_ID, "🎉 *Selesai!* Cover format Converter dan Video Reels siap diposting.")
+        bot.send_video(TELEGRAM_CHAT_ID, vid, caption=video_caption, parse_mode="Markdown")
+
+    # Mengirim draf caption artikel lengkap sebagai pesan teks terpisah
+    bot.send_message(
+        TELEGRAM_CHAT_ID,
+        f"📝 *DRAF CAPTION LENGKAP UNTUK POSTING:*\n(Salin teks di bawah ini)\n\n{full_text}",
+        parse_mode="Markdown"
+    )
+
+    bot.send_message(TELEGRAM_CHAT_ID, "🎉 *Selesai!* Seluruh paket konten sudah siap di-upload ke Instagram / TikTok.")
     bot.stop_polling()
 
 if __name__ == "__main__":
