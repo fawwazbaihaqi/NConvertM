@@ -57,7 +57,7 @@ def get_font(size, bold=True):
     return ImageFont.load_default()
 
 # ==========================================
-# 2. SCRAPER BERITA & KARTUN 2D CONVERTER
+# 2. SCRAPER BERITA & GENERATOR KARTUN 2D
 # ==========================================
 def fetch_articles():
     rss_url = "https://news.google.com/rss/search?q=berita+pendakian&hl=id&gl=ID&ceid=ID:id"
@@ -71,7 +71,7 @@ def extract_article_image(article_entry):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     }
 
-    # 1. Dari rangkuman RSS
+    # 1. Cek tag <img> di ringkasan RSS
     summary_html = article_entry.get("summary", "")
     if summary_html:
         soup_rss = BeautifulSoup(summary_html, "html.parser")
@@ -86,7 +86,7 @@ def extract_article_image(article_entry):
             except:
                 pass
 
-    # 2. Dari OpenGraph artikel
+    # 2. Cek tag meta og:image di halaman asli
     try:
         resp = requests.get(article_entry.link, headers=headers, timeout=12, allow_redirects=True)
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -103,7 +103,7 @@ def extract_article_image(article_entry):
     except:
         pass
 
-    # 3. Dari Bing Image Search berdasarkan judul berita
+    # 3. Cari foto berita terkait di Bing News Image
     try:
         clean_title = article_entry.title.rsplit("-", 1)[0].strip()
         search_url = f"https://www.bing.com/images/search?q={urllib.parse.quote(clean_title)}&first=1"
@@ -149,7 +149,7 @@ def generate_converter_cartoon_art(prompt_subject):
     return True
 
 # ==========================================
-# 3. AI CONVERTER & PROMPT GENERATOR
+# 3. AI CONVERTER & MOOD CLASSIFIER (GROQ)
 # ==========================================
 def generate_converter_content(article):
     system_prompt = (
@@ -165,7 +165,7 @@ def generate_converter_content(article):
         "  \"intro\": \"1-2 kalimat pembuka yang relevan bagi pendaki\",\n"
         "  \"isi\": \"Rangkuman berita padat, jelas, dan informatif\",\n"
         "  \"kesimpulan\": \"Pengingat keselamatan (safety reminder) bagi pendaki atas berita ini\",\n"
-        "  \"sumber_media\": \"Domain media singkat huruf kecil (contoh: kompas.com / detik.com / kilat.com)\",\n"
+        "  \"sumber_media\": \"Domain media singkat huruf kecil (contoh: kompas.com / detik.com / cna.id)\",\n"
         "  \"art_prompt\": \"Deskripsi adegan kartun 2D singkat dalam bahasa Inggris tentang isi berita ini\",\n"
         "  \"mood_musik\": \"Pilih satu: urgent, somber, upbeat, atau chill\"\n"
         "}"
@@ -196,7 +196,7 @@ def build_formatted_caption():
     )
 
 # ==========================================
-# 4. DESAIN COVER PERSIS ASET 9810 & 9811/9812
+# 4. DESAIN COVER PERSIS APLIKASI CONVERTER
 # ==========================================
 def draw_tent_icon(draw, x, y, size=48, color=(130, 134, 138)):
     w = size
@@ -206,134 +206,51 @@ def draw_tent_icon(draw, x, y, size=48, color=(130, 134, 138)):
     draw.polygon([(x + w // 2, y), (x, y + h), (x + w, y + h)], outline=color, width=2)
     draw.polygon([(x + w // 2, y + int(h * 0.45)), (x + int(w * 0.35), y + h), (x + int(w * 0.65), y + h)], outline=color, width=2)
 
-def paste_exact_top_logo(canvas, y_pos=105):
-    """Menempelkan Logo Atas Persis Gambar 9810.png (Bulan Sabit, Pinus, 2 Tenda, Api Unggun)"""
+def draw_top_dark_logo(canvas, y_pos=110):
     W, _ = canvas.size
-    logo_color = (85, 88, 91, 255)  # #55585B
-
-    # 1. Cek file logo_cover_top.png (dari 9810.png)
-    target_files = ["logo_cover_top.png", "9810.png"]
-    found_file = next((f for f in target_files if os.path.exists(f)), None)
-
-    if found_file:
-        img_logo = Image.open(found_file).convert("RGBA")
-        # Jika gambar logo berlatar putih, ubah latar putih menjadi transparan
-        datas = img_logo.getdata()
-        new_data = []
-        for item in datas:
-            if item[0] > 240 and item[1] > 240 and item[2] > 240:
-                new_data.append((255, 255, 255, 0))
-            else:
-                new_data.append((85, 88, 91, item[3] if len(item) > 3 else 255))
-        img_logo.putdata(new_data)
-        
-        # Bounding box crop untuk membuang spasi kosong
-        bbox = img_logo.getbbox()
-        if bbox:
-            img_logo = img_logo.crop(bbox)
-        
-        # Resize ke proporsi tepat di bagian atas
-        img_logo.thumbnail((120, 120), Image.Resampling.LANCZOS)
-        canvas.alpha_composite(img_logo, ((W - img_logo.width) // 2, y_pos))
+    dark_grey = (82, 86, 89, 255)
+    if os.path.exists("logo_top_dark.png"):
+        l_top = Image.open("logo_top_dark.png").convert("RGBA")
+        l_top.thumbnail((110, 110), Image.Resampling.LANCZOS)
+        canvas.alpha_composite(l_top, ((W - l_top.width) // 2, y_pos))
+    elif os.path.exists("logo_top.png") or os.path.exists("logo.png"):
+        p = "logo_top.png" if os.path.exists("logo_top.png") else "logo.png"
+        l_top = Image.open(p).convert("RGBA")
+        l_top.thumbnail((110, 110), Image.Resampling.LANCZOS)
+        _, _, _, a = l_top.split()
+        colored = Image.new("RGBA", l_top.size, dark_grey)
+        colored.putalpha(a)
+        canvas.alpha_composite(colored, ((W - l_top.width) // 2, y_pos))
     else:
-        # Fallback geometris jika belum ada file
         draw = ImageDraw.Draw(canvas)
         cx, cy = W // 2, y_pos + 45
-        draw.ellipse([cx - 45, cy - 45, cx + 45, cy + 45], fill=logo_color)
+        draw.ellipse([cx - 45, cy - 45, cx + 45, cy + 45], fill=dark_grey)
         draw.ellipse([cx - 28, cy - 42, cx + 42, cy + 28], fill=(255, 255, 255, 255))
-        draw.polygon([(cx - 18, cy + 24), (cx - 2, cy - 8), (cx + 14, cy + 24)], fill=logo_color)
-        draw.polygon([(cx, cy + 24), (cx + 16, cy - 2), (cx + 30, cy + 24)], fill=logo_color)
-
-def draw_exact_bottom_pill(canvas, sumber_text):
-    """
-    Menggambar Kapsul Footer Bawah Persis Gambar 9811.png & 9812.png:
-    - Warna Kapsul: #5E6164
-    - Kiri: Logo Teks CampersMagz Putih
-    - Kanan: Teks foto: [sumber] Putih
-    """
-    W, H = canvas.size
-    draw = ImageDraw.Draw(canvas)
-    
-    pill_color = (94, 97, 100, 255)  # #5E6164 persis dari 9811.png
-    pill_x1, pill_y1 = 60, 1805
-    pill_x2, pill_y2 = 1020, 1862
-    pill_height = pill_y2 - pill_y1
-    draw.rounded_rectangle([pill_x1, pill_y1, pill_x2, pill_y2], radius=pill_height // 2, fill=pill_color)
-
-    # 1. TEMPEL LOGO CAMPERSMAGZ DI KIRI KAPSUL (Persis 9812.png)
-    pill_logo_files = ["logo_campersmagz_pill.png", "9812.png"]
-    found_logo = next((f for f in pill_logo_files if os.path.exists(f)), None)
-
-    if found_logo:
-        c_logo = Image.open(found_logo).convert("RGBA")
-        # Jika gambar logo memiliki background abu-abu gelap (#5D6063), buat transparan atau ambil huruf putihnya
-        datas = c_logo.getdata()
-        new_data = []
-        for item in datas:
-            # Ambil piksel putih (huruf)
-            if item[0] > 210 and item[1] > 210 and item[2] > 210:
-                new_data.append((255, 255, 255, 255))
-            else:
-                new_data.append((255, 255, 255, 0))
-        c_logo.putdata(new_data)
-        bbox = c_logo.getbbox()
-        if bbox:
-            c_logo = c_logo.crop(bbox)
-        
-        # Sesuaikan tinggi logo agar pas di dalam kapsul (tinggi ~30px)
-        aspect = c_logo.width / c_logo.height
-        target_h = 28
-        target_w = int(target_h * aspect)
-        c_logo = c_logo.resize((target_w, target_h), Image.Resampling.LANCZOS)
-        
-        pos_y = pill_y1 + (pill_height - target_h) // 2
-        canvas.alpha_composite(c_logo, (pill_x1 + 32, pos_y))
-    else:
-        # Fallback teks tipografi berskala
-        font_b1 = get_font(31, bold=True)
-        font_b2 = get_font(23, bold=True)
-        y_text = pill_y1 + 13
-        draw.text((pill_x1 + 30, y_text), "C", font=font_b1, fill=(255, 255, 255, 255))
-        draw.text((pill_x1 + 54, y_text + 6), "AMPERS", font=font_b2, fill=(255, 255, 255, 255))
-        draw.text((pill_x1 + 162, y_text), "M", font=font_b1, fill=(255, 255, 255, 255))
-        draw.text((pill_x1 + 192, y_text + 6), "AGZ", font=font_b2, fill=(255, 255, 255, 255))
-
-    # 2. TULIS KREDIT SUMBER DI KANAN KAPSUL (Contoh: foto: kilat.com)
-    font_credit = get_font(23, bold=False)
-    credit_str = f"foto: {sumber_text.lower()}"
-    bbox_cr = draw.textbbox((0, 0), credit_str, font=font_credit)
-    cr_w = bbox_cr[2] - bbox_cr[0]
-    cr_h = bbox_cr[3] - bbox_cr[1]
-    
-    pos_cr_x = pill_x2 - cr_w - 36
-    pos_cr_y = pill_y1 + (pill_height - cr_h) // 2 - 2
-    draw.text((pos_cr_x, pos_cr_y), credit_str, font=font_credit, fill=(255, 255, 255, 255))
+        draw.polygon([(cx - 18, cy + 24), (cx - 2, cy - 8), (cx + 14, cy + 24)], fill=dark_grey)
+        draw.polygon([(cx, cy + 24), (cx + 16, cy - 2), (cx + 30, cy + 24)], fill=dark_grey)
 
 def create_converter_cover():
-    """Merender cover 1080x1920 utuh sesuai format asli aplikasi Converter"""
     W, H = 1080, 1920
     canvas = Image.new("RGBA", (W, H), (255, 255, 255, 255))
     draw = ImageDraw.Draw(canvas)
 
-    text_dark = (85, 88, 91, 255)  # #55585B
-    pill_sub_bg = (228, 228, 228, 255)
+    text_dark = (82, 86, 89, 255)
+    pill_bg = (224, 224, 224, 255)
+    footer_grey = (104, 108, 111, 255)
 
-    # 1. Tempel Logo Atas (Persis 9810.png)
-    paste_exact_top_logo(canvas, y_pos=105)
+    draw_top_dark_logo(canvas, y_pos=110)
 
     judul = state["selected_title"].strip()
     kata_kunci = state["converter_data"].get("kata_kunci_utama", "Info Gunung").strip()
 
-    # 2. Gambar & Teks Berita
     if not state["is_ai_art"]:
-        # Format Foto Berita Asli (Contoh: Arjuno dengan Rounded Box di tengah)
         font_big = get_font(105, bold=True)
         font_sub = get_font(44, bold=False)
 
         bbox_kw = draw.textbbox((0, 0), kata_kunci, font=font_big)
         kw_w = bbox_kw[2] - bbox_kw[0]
         kw_h = bbox_kw[3] - bbox_kw[1]
-        draw.rounded_rectangle([85, 480 + kw_h - 15, 85 + kw_w + 25, 480 + kw_h + 32], radius=16, fill=pill_sub_bg)
+        draw.rounded_rectangle([85, 480 + kw_h - 15, 85 + kw_w + 25, 480 + kw_h + 32], radius=16, fill=pill_bg)
 
         draw.text((90, 460), kata_kunci, font=font_big, fill=text_dark)
         draw_tent_icon(draw, 95 + kw_w + 8, 450, size=50, color=(130, 134, 138))
@@ -375,14 +292,14 @@ def create_converter_cover():
             canvas.paste(src_img, (105, 890), mask)
 
     else:
-        # Format Kartun 2D AI (Menyatu di paruh bawah kanvas putih)
         if os.path.exists(state["cover_source_img"]):
             art_img = Image.open(state["cover_source_img"]).convert("RGBA")
             art_img = art_img.resize((1080, 1080), Image.Resampling.LANCZOS)
             fade_mask = Image.new("L", (1080, 1080), 255)
             f_draw = ImageDraw.Draw(fade_mask)
             for fy in range(140):
-                f_draw.line([(0, fy), (1080, fy)], fill=int(255 * (fy / 140)))
+                alpha_val = int(255 * (fy / 140))
+                f_draw.line([(0, fy), (1080, fy)], fill=alpha_val)
             canvas.paste(art_img, (0, 780), fade_mask)
 
         font_reg = get_font(50, bold=False)
@@ -409,16 +326,32 @@ def create_converter_cover():
                 draw_tent_icon(draw, tx + tw + 10, y_txt - 35, size=48, color=(130, 134, 138))
             y_txt += 72
 
-    # 3. Tempel Kapsul Footer Bawah (Persis 9811.png & 9812.png)
-    sumber_nama = "gemini" if state["is_ai_art"] else state["converter_data"]["sumber_media"]
-    draw_exact_bottom_pill(canvas, sumber_nama)
+    draw.rounded_rectangle([60, 1805, 1020, 1862], radius=28, fill=footer_grey)
+
+    if os.path.exists("logo_bottom.png"):
+        l_bot = Image.open("logo_bottom.png").convert("RGBA")
+        l_bot.thumbnail((260, 45), Image.Resampling.LANCZOS)
+        canvas.alpha_composite(l_bot, (90, 1812))
+    else:
+        font_brand_big = get_font(33, bold=True)
+        font_brand_small = get_font(25, bold=True)
+        draw.text((92, 1815), "C", font=font_brand_big, fill=(255, 255, 255, 255))
+        draw.text((118, 1821), "AMPERS", font=font_brand_small, fill=(255, 255, 255, 255))
+        draw.text((232, 1815), "M", font=font_brand_big, fill=(255, 255, 255, 255))
+        draw.text((266, 1821), "AGZ", font=font_brand_small, fill=(255, 255, 255, 255))
+
+    font_credit = get_font(24, bold=False)
+    sumber_kredit = "foto: gemini" if state["is_ai_art"] else f"foto: {state['converter_data']['sumber_media'].lower()}"
+    bbox_cr = draw.textbbox((0, 0), sumber_kredit, font=font_credit)
+    cr_w = bbox_cr[2] - bbox_cr[0]
+    draw.text((990 - cr_w, 1820), sumber_kredit, font=font_credit, fill=(255, 255, 255, 255))
 
     out_img = canvas.convert("RGB")
     out_img.save(state["final_cover_img"])
     return state["final_cover_img"]
 
 # ==========================================
-# 5. OVERLAY VIDEO REELS (FULLSCREEN 9:16)
+# 5. OVERLAY KHUSUS VIDEO REELS (9:16)
 # ==========================================
 def draw_centered_video_text(base_img, y_pos, text, font, text_color=(255, 255, 255, 255)):
     W, _ = base_img.size
@@ -444,15 +377,14 @@ def draw_centered_video_text(base_img, y_pos, text, font, text_color=(255, 255, 
 def create_video_overlay(custom_source=None):
     W, H = 1080, 1920
     canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(canvas)
 
-    # Logo Video Atas Putih
     if os.path.exists("logo_top.png") or os.path.exists("logo.png"):
         p = "logo_top.png" if os.path.exists("logo_top.png") else "logo.png"
         l_top = Image.open(p).convert("RGBA")
         l_top.thumbnail((115, 115), Image.Resampling.LANCZOS)
         canvas.alpha_composite(l_top, ((W - l_top.width) // 2, 120))
     else:
+        draw = ImageDraw.Draw(canvas)
         draw.ellipse([W//2 - 45, 120, W//2 + 45, 210], outline=(255, 255, 255, 240), width=6)
         draw.polygon([(W//2 - 22, 190), (W//2, 150), (W//2 + 22, 190)], fill=(255, 255, 255, 240))
 
@@ -484,7 +416,7 @@ def create_video_overlay(custom_source=None):
     return out_path
 
 # ==========================================
-# 6. RENDER VIDEO & AUDIO INSTRUMENTAL
+# 6. MOOD SYNTHESIZER & FFMPEG RENDERER
 # ==========================================
 def prepare_mood_audio(mood="chill", duration=12):
     mood = str(mood).lower().strip()
@@ -531,4 +463,239 @@ def render_final_video(mode="pan_image", add_instrumental=True):
             "crop=1080:1920:(iw-ow)*t/5:(ih-oh)/2[bg];"
             "[bg][1:v]overlay=0:0[outv]"
         )
-        cmd = ["ffmpeg", "-y", "-loop", "1", "-t", "5", "-i", state["cover
+        cmd = ["ffmpeg", "-y", "-loop", "1", "-t", "5", "-i", state["cover_source_img"], "-i", overlay_png]
+        if has_bgm:
+            cmd += [
+                "-i", bgm_path,
+                "-filter_complex", vf_filter + ";[2:a]afade=t=out:st=3.5:d=1.5[outa]",
+                "-map", "[outv]", "-map", "[outa]"
+            ]
+        else:
+            cmd += ["-filter_complex", vf_filter, "-map", "[outv]"]
+        cmd += ["-t", "5", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-shortest", output_mp4]
+
+    else:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", state["uploaded_video_path"]],
+            capture_output=True, text=True
+        )
+        try:
+            dur = float(probe.stdout.strip())
+        except:
+            dur = 8.0
+        fade_start = max(0.5, dur - 2.0)
+
+        probe_audio = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", state["uploaded_video_path"]],
+            capture_output=True, text=True
+        )
+        video_has_audio = bool(probe_audio.stdout.strip())
+
+        vf_filter = (
+            "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
+            "crop=1080:1920[bg];"
+            "[bg][1:v]overlay=0:0[outv]"
+        )
+        cmd = ["ffmpeg", "-y", "-i", state["uploaded_video_path"], "-i", overlay_png]
+        if has_bgm:
+            bgm_actual = prepare_mood_audio(mood=mood_berita, duration=int(dur) + 3)
+            cmd += ["-i", bgm_actual]
+            if video_has_audio:
+                cmd += [
+                    "-filter_complex", f"{vf_filter};[2:a]afade=t=out:st={fade_start}:d=2[bgm];[0:a][bgm]amix=inputs=2:duration=first[outa]",
+                    "-map", "[outv]", "-map", "[outa]"
+                ]
+            else:
+                cmd += [
+                    "-filter_complex", f"{vf_filter};[2:a]afade=t=out:st={fade_start}:d=2[outa]",
+                    "-map", "[outv]", "-map", "[outa]"
+                ]
+        else:
+            cmd += ["-filter_complex", vf_filter, "-map", "[outv]"]
+            if video_has_audio:
+                cmd += ["-map", "0:a"]
+
+        cmd += ["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-shortest", output_mp4]
+
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    for line in process.stdout:
+        print(line, end="")
+    process.wait()
+
+    if process.returncode != 0:
+        raise RuntimeError("FFmpeg gagal merender video.")
+    return output_mp4
+
+# ==========================================
+# 7. HANDLER INTERAKTIF TELEGRAM
+# ==========================================
+def send_news_candidate():
+    if state["current_idx"] >= len(state["articles"]):
+        bot.send_message(TELEGRAM_CHAT_ID, "⚠️ Semua berita terbaru sudah ditampilkan.")
+        bot.stop_polling()
+        return
+
+    art = state["articles"][state["current_idx"]]
+    state["article"] = art
+    
+    markup = InlineKeyboardMarkup()
+    markup.row(
+        InlineKeyboardButton("✅ Pilih Berita Ini", callback_data="news_accept"),
+        InlineKeyboardButton("🔄 Pilih Berita Lain", callback_data="news_next")
+    )
+    msg = f"📰 *KANDIDAT BERITA #{state['current_idx'] + 1}*\n\n*{art.title}*\n\n🔗 {art.link}"
+    bot.send_message(TELEGRAM_CHAT_ID, msg, parse_mode="Markdown", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: True)
+def handle_callbacks(call):
+    try:
+        data = call.data
+
+        if data == "news_next":
+            state["current_idx"] += 1
+            bot.answer_callback_query(call.id, "Mencari berita lain...")
+            send_news_candidate()
+
+        elif data == "news_accept":
+            bot.answer_callback_query(call.id, "Memproses draf...")
+            bot.send_message(TELEGRAM_CHAT_ID, "⏳ Mengambil foto sumber berita & membuat Cover format Converter...")
+            
+            extract_article_image(state["article"])
+            state["converter_data"] = generate_converter_content(state["article"])
+            state["selected_title"] = state["converter_data"]["opsi_judul"][0]
+            
+            cover_path = create_converter_cover()
+            mood_terdeteksi = state["converter_data"].get("mood_musik", "chill").upper()
+            
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("🖼️ Pilih Gambar Ini Sebagai Cover", callback_data="cover_keep"))
+            markup.add(InlineKeyboardButton("🎨 Generate Cover Kartun 2D (Converter)", callback_data="cover_cartoon"))
+            
+            with open(cover_path, "rb") as ph:
+                bot.send_photo(
+                    TELEGRAM_CHAT_ID, ph,
+                    caption=f"📌 *Preview Cover (Format Asli News Converter)*\n🎵 Suasana Musik: `{mood_terdeteksi}`",
+                    parse_mode="Markdown", reply_markup=markup
+                )
+
+        elif data == "cover_cartoon":
+            bot.answer_callback_query(call.id, "Membuat Kartun 2D...")
+            bot.send_message(TELEGRAM_CHAT_ID, "🎨 Sedang merender Ilustrasi Kartun 2D berlatar putih...")
+            generate_converter_cartoon_art(state["converter_data"]["art_prompt"])
+            
+            cover_path = create_converter_cover()
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("✅ Pilih Gambar Ini Sebagai Cover", callback_data="cover_keep"))
+            markup.add(InlineKeyboardButton("🔄 Generate Ulang Kartun 2D", callback_data="cover_cartoon"))
+            
+            with open(cover_path, "rb") as ph:
+                bot.send_photo(TELEGRAM_CHAT_ID, ph, caption="🎨 *Hasil Cover Ilustrasi Kartun 2D*", parse_mode="Markdown", reply_markup=markup)
+
+        elif data == "cover_keep":
+            bot.answer_callback_query(call.id, "Cover dikunci!")
+            send_title_options()
+
+        elif data.startswith("title_"):
+            idx = int(data.split("_")[1])
+            state["selected_title"] = state["converter_data"]["opsi_judul"][idx]
+            create_converter_cover()
+            bot.answer_callback_query(call.id, "Judul ditetapkan!")
+            send_caption_review()
+
+        elif data == "cap_regen":
+            bot.answer_callback_query(call.id, "Membuat caption lain...")
+            state["converter_data"] = generate_converter_content(state["article"])
+            send_caption_review()
+
+        elif data == "cap_keep":
+            bot.answer_callback_query(call.id, "Caption dikunci!")
+            markup = InlineKeyboardMarkup()
+            markup.row(
+                InlineKeyboardButton("🎞️ Tidak Upload Video (Pan 5s)", callback_data="vid_no_upload"),
+                InlineKeyboardButton("📤 Upload Video", callback_data="vid_upload")
+            )
+            bot.send_message(TELEGRAM_CHAT_ID, "🎬 *PILIH OPSI PEMBUATAN VIDEO:*", parse_mode="Markdown", reply_markup=markup)
+
+        elif data == "vid_no_upload":
+            bot.answer_callback_query(call.id, "Merender video 5 detik...")
+            mood = state["converter_data"].get("mood_musik", "chill").upper()
+            bot.send_message(TELEGRAM_CHAT_ID, f"⚙️ Merender video Pan 5 detik + Audio (`{mood}`) dengan Fade Out...")
+            mp4 = render_final_video(mode="pan_image", add_instrumental=True)
+            send_final_package(mp4)
+
+        elif data == "vid_upload":
+            state["waiting_for_video_upload"] = True
+            bot.answer_callback_query(call.id, "Silakan upload video...")
+            bot.send_message(
+                TELEGRAM_CHAT_ID,
+                "📤 *Silakan upload video Anda sekarang.*\n"
+                "Tulis sumbernya di bagian *Caption* saat mengirim video (contoh: `tiktok/gabriel_iqbal`).",
+                parse_mode="Markdown"
+            )
+
+        elif data in ["bgm_yes", "bgm_no"]:
+            add_bgm = (data == "bgm_yes")
+            bot.answer_callback_query(call.id, "Mengedit video...")
+            bot.send_message(TELEGRAM_CHAT_ID, "⚙️ Sedang mengedit video sesuai format Reels CampersMagz...")
+            mp4 = render_final_video(mode="user_video", add_instrumental=add_bgm)
+            send_final_package(mp4)
+
+    except Exception as e:
+        print(f"Error pada callback: {e}")
+        bot.send_message(TELEGRAM_CHAT_ID, f"⚠️ Terjadi kendala teknis: `{e}`", parse_mode="Markdown")
+
+def send_title_options():
+    markup = InlineKeyboardMarkup()
+    opsi = state["converter_data"]["opsi_judul"]
+    txt = "📌 *PILIH OPSI JUDUL VIDEO & COVER:*\n\n"
+    for i, j in enumerate(opsi):
+        txt += f"{i+1}. {j}\n"
+        markup.add(InlineKeyboardButton(f"Pilih Judul #{i+1}", callback_data=f"title_{i}"))
+    bot.send_message(TELEGRAM_CHAT_ID, txt, parse_mode="Markdown", reply_markup=markup)
+
+def send_caption_review():
+    cap = build_formatted_caption()
+    markup = InlineKeyboardMarkup()
+    markup.row(
+        InlineKeyboardButton("✅ Pilih Caption Ini", callback_data="cap_keep"),
+        InlineKeyboardButton("🔄 Generate Caption Lain", callback_data="cap_regen")
+    )
+    bot.send_message(TELEGRAM_CHAT_ID, f"📝 *REVIEW CAPTION:*\n\n{cap}", parse_mode="Markdown", reply_markup=markup)
+
+@bot.message_handler(content_types=["video"])
+def handle_user_video(message):
+    if not state["waiting_for_video_upload"]:
+        return
+    bot.send_message(TELEGRAM_CHAT_ID, "⏳ Mengunduh video Anda...")
+    file_info = bot.get_file(message.video.file_id)
+    downloaded = bot.download_file(file_info.file_path)
+    with open(state["uploaded_video_path"], "wb") as f:
+        f.write(downloaded)
+    
+    sumber_raw = message.caption.strip() if message.caption else state["converter_data"]["sumber_media"]
+    if not sumber_raw.lower().startswith(("video:", "foto:")):
+        sumber_raw = f"Video: {sumber_raw}"
+    state["custom_source_text"] = sumber_raw
+    state["waiting_for_video_upload"] = False
+
+    mood = state["converter_data"].get("mood_musik", "chill").upper()
+    markup = InlineKeyboardMarkup()
+    markup.row(
+        InlineKeyboardButton(f"🎵 Isi Suara Instrumental ({mood})", callback_data="bgm_yes"),
+        InlineKeyboardButton("🔇 Tidak Isi Suara Instrumental", callback_data="bgm_no")
+    )
+    bot.send_message(TELEGRAM_CHAT_ID, "🎶 *Pilih opsi audio untuk video ini:*", parse_mode="Markdown", reply_markup=markup)
+
+def send_final_package(mp4_path):
+    cap = build_formatted_caption()
+    with open(state["final_cover_img"], "rb") as cov:
+        bot.send_photo(TELEGRAM_CHAT_ID, cov, caption="✅ *COVER FINAL (FORMAT CONVERTER)*", parse_mode="Markdown")
+    with open(mp4_path, "rb") as vid:
+        bot.send_video(TELEGRAM_CHAT_ID, vid, caption=cap, parse_mode="Markdown")
+    bot.send_message(TELEGRAM_CHAT_ID, "🎉 *Selesai!* Cover putih ala Converter dan Video Reels sudah siap diposting.")
+    bot.stop_polling()
+
+if __name__ == "__main__":
+    fetch_articles()
+    send_news_candidate()
+    bot.infinity_polling(timeout=20, long_polling_timeout=10)
