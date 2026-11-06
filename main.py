@@ -2,7 +2,6 @@ import os
 import json
 import re
 import base64
-import random
 import urllib.parse
 import subprocess
 from io import BytesIO
@@ -13,9 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# ==========================================
 # 1. KONFIGURASI API & CLIENTS
-# ==========================================
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GH_TOKEN = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -23,20 +20,18 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 if not all([TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
-    raise ValueError("Pastikan TELEGRAM_BOT_TOKEN dan TELEGRAM_CHAT_ID sudah disetel di Secrets!")
+    raise ValueError("TELEGRAM_BOT_TOKEN & TELEGRAM_CHAT_ID wajib diisi!")
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
-# Inisialisasi Groq Client
 groq_client = None
 if GROQ_API_KEY:
     try:
         from groq import Groq
         groq_client = Groq(api_key=GROQ_API_KEY)
     except Exception as e:
-        print(f"Info: Groq SDK tidak aktif: {e}")
+        print(f"Groq init skip: {e}")
 
-# Inisialisasi GitHub Models Client
 gh_client = None
 if GH_TOKEN:
     try:
@@ -46,16 +41,15 @@ if GH_TOKEN:
             api_key=GH_TOKEN
         )
     except Exception as e:
-        print(f"Info: GitHub Models SDK tidak aktif: {e}")
+        print(f"GitHub Models init skip: {e}")
 
-# Inisialisasi Gemini Client
 genai_client = None
 if GEMINI_API_KEY:
     try:
         from google import genai
         genai_client = genai.Client(api_key=GEMINI_API_KEY)
     except Exception as e:
-        print(f"Info: Google GenAI SDK tidak aktif: {e}")
+        print(f"Gemini init skip: {e}")
 
 state = {
     "articles": [],
@@ -72,13 +66,12 @@ state = {
     "is_ai_art": False
 }
 
-# ==========================================
 # 2. SISTEM FONT NUNITO OTOMATIS
-# ==========================================
 def ensure_nunito_fonts():
+    base_url = "https://github.com/google/fonts/raw/main/ofl/nunito/"
     fonts = {
-        "Nunito-Bold.ttf": "https://github.com/google/fonts/raw/main/ofl/nunito/Nunito-Bold.ttf",
-        "Nunito-Regular.ttf": "https://github.com/google/fonts/raw/main/ofl/nunito/Nunito-Regular.ttf"
+        "Nunito-Bold.ttf": base_url + "Nunito-Bold.ttf",
+        "Nunito-Regular.ttf": base_url + "Nunito-Regular.ttf"
     }
     headers = {"User-Agent": "Mozilla/5.0"}
     for f_name, url in fonts.items():
@@ -89,7 +82,7 @@ def ensure_nunito_fonts():
                     with open(f_name, "wb") as f:
                         f.write(r.content)
             except Exception as e:
-                print(f"Gagal unduh font {f_name}: {e}")
+                print(f"Font skip {f_name}: {e}")
 
 ensure_nunito_fonts()
 
@@ -97,13 +90,11 @@ def get_nunito_font(size, bold=True):
     font_path = "Nunito-Bold.ttf" if bold else "Nunito-Regular.ttf"
     if os.path.exists(font_path):
         return ImageFont.truetype(font_path, int(size))
-    fallback_paths = [
-        f"/usr/share/fonts/truetype/dejavu/DejaVuSans{'-Bold' if bold else ''}.ttf",
-        f"/usr/share/fonts/truetype/liberation/LiberationSans{'-Bold' if bold else '-Regular'}.ttf"
-    ]
-    for path in fallback_paths:
-        if os.path.exists(path):
-            return ImageFont.truetype(path, int(size))
+    fb_bold = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    fb_reg = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    target = fb_bold if bold else fb_reg
+    if os.path.exists(target):
+        return ImageFont.truetype(target, int(size))
     return ImageFont.load_default()
 
 def find_asset_file(exact_names, fallback_keywords):
@@ -118,11 +109,10 @@ def find_asset_file(exact_names, fallback_keywords):
                     return f
     return None
 
-# ==========================================
 # 3. SCRAPER BERITA & NANO BANANA ART
-# ==========================================
 def fetch_articles():
-    rss_url = "https://news.google.com/rss/search?q=berita+pendakian+gunung&hl=id&gl=ID&ceid=ID:id"
+    q = "berita+pendakian+gunung&hl=id&gl=ID&ceid=ID:id"
+    rss_url = f"https://news.google.com/rss/search?q={q}"
     feed = feedparser.parse(rss_url)
     state["articles"] = feed.entries
     state["current_idx"] = 0
@@ -132,21 +122,20 @@ def resolve_google_news_url(google_url):
         if "articles/CBM" in google_url:
             token = google_url.split("articles/")[1].split("?")[0]
             padded = token + "=" * (-len(token) % 4)
-            decoded_bytes = base64.urlsafe_b64decode(padded)
-            match_url = re.search(rb'https?://[^\x00-\x1f\x7f-\xff]+', decoded_bytes)
-            if match_url:
-                return match_url.group(0).decode("utf-8", errors="ignore")
+            decoded = base64.urlsafe_b64decode(padded)
+            m = re.search(rb'https?://[^\x00-\x1f\x7f-\xff]+', decoded)
+            if m:
+                return m.group(0).decode("utf-8", errors="ignore")
     except:
         pass
-
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0"}
-        resp = requests.get(google_url, headers=headers, timeout=8, allow_redirects=True)
-        if "google.com" not in resp.url:
-            return resp.url
-        match = re.search(r'data-n-au="([^"]+)"', resp.text)
-        if match:
-            return match.group(1)
+        h = {"User-Agent": "Mozilla/5.0 Chrome/124.0.0.0"}
+        r = requests.get(google_url, headers=h, timeout=8, allow_redirects=True)
+        if "google.com" not in r.url:
+            return r.url
+        m = re.search(r'data-n-au="([^"]+)"', r.text)
+        if m:
+            return m.group(1)
     except:
         pass
     return google_url
@@ -154,29 +143,31 @@ def resolve_google_news_url(google_url):
 def extract_article_image(article_entry):
     state["is_ai_art"] = False
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0",
+        "User-Agent": "Mozilla/5.0 Chrome/124.0.0.0",
         "Referer": "https://www.google.com/"
     }
-
     real_url = resolve_google_news_url(article_entry.link)
     if "news.google.com" not in real_url:
         try:
-            resp = requests.get(real_url, headers=headers, timeout=12, allow_redirects=True)
+            resp = requests.get(real_url, headers=headers, timeout=12)
             soup = BeautifulSoup(resp.text, "html.parser")
             img_url = None
             for prop in ["og:image", "twitter:image", "image"]:
-                tag = soup.find("meta", property=prop) or soup.find("meta", attrs={"name": prop})
-                if tag and tag.get("content") and "googleusercontent" not in tag.get("content", ""):
-                    img_url = tag["content"]
-                    break
-
+                tag = (
+                    soup.find("meta", property=prop)
+                    or soup.find("meta", attrs={"name": prop})
+                )
+                if tag and tag.get("content"):
+                    if "googleusercontent" not in tag.get("content", ""):
+                        img_url = tag["content"]
+                        break
             if not img_url:
-                for sel in [".photo img", ".read__content img", "article img", "figure img", ".detail__media-image img"]:
+                sels = [".photo img", ".read__content img", "article img", "figure img"]
+                for sel in sels:
                     el = soup.select_one(sel)
                     if el and (el.get("src") or el.get("data-src")):
                         img_url = el.get("src") or el.get("data-src")
                         break
-
             if img_url:
                 if img_url.startswith("//"):
                     img_url = "https:" + img_url
@@ -190,14 +181,15 @@ def extract_article_image(article_entry):
 
     try:
         clean_title = article_entry.title.rsplit("-", 1)[0].strip()
-        bing_url = f"https://www.bing.com/images/search?q={urllib.parse.quote(clean_title + ' berita')}&form=HDRSC2"
+        q_str = urllib.parse.quote(clean_title + " berita")
+        bing_url = f"https://www.bing.com/images/search?q={q_str}&form=HDRSC2"
         r = requests.get(bing_url, headers=headers, timeout=10)
         img_urls = re.findall(r'murl&quot;:&quot;(https?://[^&]+?)&quot;', r.text)
-        for candidate in img_urls[:6]:
-            if any(bad in candidate.lower() for bad in ["pollinations", "freepik", "vector", "icon"]):
+        for cand in img_urls[:6]:
+            if any(b in cand.lower() for b in ["pollinations", "freepik", "vector"]):
                 continue
             try:
-                c_data = requests.get(candidate, headers=headers, timeout=8).content
+                c_data = requests.get(cand, headers=headers, timeout=8).content
                 c_img = Image.open(BytesIO(c_data)).convert("RGB")
                 if c_img.width >= 350 and c_img.height >= 220:
                     c_img.save(state["cover_source_img"])
@@ -213,19 +205,16 @@ def extract_article_image(article_entry):
 def generate_nano_banana_art(prompt_subject):
     state["is_ai_art"] = True
     if not genai_client:
-        print("GEMINI_API_KEY belum disetel untuk Nano Banana!")
         img = Image.new("RGB", (1024, 1024), color="#FFFFFF")
         img.save(state["cover_source_img"])
         return False
-
     try:
         prompt = (
             f"2D editorial comic cartoon vector illustration of {prompt_subject}, "
-            f"Indonesian mountain adventure hiker character scene, clean bold black ink line art outlines, "
-            f"vibrant flat colors, subject centered and isolated on a solid pure clean white background (#FFFFFF), "
-            f"completely blank white space at top, no text, no letters, no speech bubbles, no watermark."
+            f"Indonesian mountain hiker scene, clean bold black ink outlines, "
+            f"vibrant flat colors, subject centered and isolated on a solid pure "
+            f"white background (#FFFFFF), blank white space at top, no text, no watermark."
         )
-        print("Memanggil Nano Banana (gemini-2.5-flash-image)...")
         response = genai_client.models.generate_content(
             model="gemini-2.5-flash-image",
             contents=prompt
@@ -234,7 +223,6 @@ def generate_nano_banana_art(prompt_subject):
             if part.inline_data:
                 img = Image.open(BytesIO(part.inline_data.data)).convert("RGB")
                 img.save(state["cover_source_img"])
-                print("Berhasil membuat gambar dengan Nano Banana!")
                 return True
     except Exception as e:
         print(f"Error Nano Banana: {e}")
@@ -243,34 +231,33 @@ def generate_nano_banana_art(prompt_subject):
     img.save(state["cover_source_img"])
     return False
 
-# ==========================================
-# 4. KONTEN DRAF BERITA (3-TIER AI ENGINE)
-# ==========================================
+# 4. KONTEN DRAF BERITA (3-TIER: GROQ -> GITHUB -> GEMINI)
 def generate_converter_content(article):
     system_prompt = (
         "Kamu adalah aplikasi CampersMagz News Converter. "
-        "Analisis berita dan hasilkan JSON murni TANPA markdown backtick dengan format persis:\n"
+        "Hasilkan JSON murni TANPA markdown backtick dengan format persis:\n"
         "{\n"
-        "  \"kata_kunci_utama\": \"Nama gunung atau subjek utama maksimal 2-3 kata (contoh: Arjuno / Welirang / Semeru)\",\n"
-        "  \"opsi_judul\": [\n"
-        "    \"Judul Singkat 1 (7-10 kata, diakhiri !)\",\n"
-        "    \"Judul Singkat 2 (7-10 kata, diakhiri !)\",\n"
-        "    \"Judul Singkat 3 (7-10 kata, diakhiri !?)\"\n"
+        '  "kata_kunci_utama": "Nama gunung maksimal 2-3 kata",\n'
+        '  "opsi_judul": [\n'
+        '    "Judul 1 (7-10 kata, diakhiri !)",\n'
+        '    "Judul 2 (7-10 kata, diakhiri !)",\n'
+        '    "Judul 3 (7-10 kata, diakhiri !?)"\n'
         "  ],\n"
-        "  \"intro\": \"1-2 kalimat pembuka padat bagi pendaki\",\n"
-        "  \"isi\": \"Rangkuman berita padat dan jelas (maksimal 2 paragraf pendek)\",\n"
-        "  \"kesimpulan\": \"Pengingat keselamatan (safety reminder) singkat\",\n"
-        "  \"sumber_media\": \"Domain media singkat (contoh: kompas.com / detik.com)\",\n"
-        "  \"art_prompt\": \"Deskripsi adegan kartun 2D singkat bahasa Inggris tentang berita ini\",\n"
-        "  \"mood_musik\": \"Pilih satu: urgent, somber, upbeat, atau chill\"\n"
+        '  "intro": "1-2 kalimat pembuka padat bagi pendaki",\n'
+        '  "isi": "Rangkuman berita padat (maksimal 2 paragraf pendek)",\n'
+        '  "kesimpulan": "Pengingat keselamatan singkat",\n'
+        '  "sumber_media": "Domain media singkat (contoh: kompas.com)",\n'
+        '  "art_prompt": "Deskripsi kartun 2D singkat bahasa Inggris",\n'
+        '  "mood_musik": "Pilih satu: urgent, somber, upbeat, atau chill"\n'
         "}"
     )
-    user_txt = f"Judul: {article.title}\nRingkasan: {article.get('summary', '')[:400]}"
+    summary_cut = article.get("summary", "")[:400]
+    user_txt = f"Judul: {article.title}\nRingkasan: {summary_cut}"
 
-    # Prioritas 1: Groq (Qwen 3.8 / 27B)
+    # 1. Groq (Qwen 3.8)
     if groq_client:
         try:
-            print("Langkah 1: Memproses draf via Groq (qwen/qwen3.8-27b)...")
+            print("Langkah 1: Groq qwen/qwen3.8-27b...")
             res = groq_client.chat.completions.create(
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -284,12 +271,12 @@ def generate_converter_content(article):
             raw = re.sub(r"^```json\s*|\s*```$", "", raw).strip()
             return json.loads(raw)
         except Exception as e:
-            print(f"Groq terkendala ({e}), beralih ke Langkah 2 (GitHub Models)...")
+            print(f"Groq gagal ({e}), lanjut ke GitHub Models...")
 
-    # Prioritas 2: GitHub Models (GPT-4o-mini)
+    # 2. GitHub Models (GPT-4o-mini)
     if gh_client:
         try:
-            print("Langkah 2: Memproses draf via GitHub Models (gpt-4o-mini)...")
+            print("Langkah 2: GitHub Models gpt-4o-mini...")
             res = gh_client.chat.completions.create(
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -304,27 +291,25 @@ def generate_converter_content(article):
             raw = re.sub(r"^```json\s*|\s*```$", "", raw).strip()
             return json.loads(raw)
         except Exception as e:
-            print(f"GitHub Models terkendala ({e}), beralih ke Langkah 3 (Gemini Flash)...")
+            print(f"GitHub Models gagal ({e}), lanjut ke Gemini...")
 
-    # Prioritas 3: Gemini (Gemini 2.5 Flash)
+    # 3. Gemini 2.5 Flash
     if genai_client:
         try:
-            print("Langkah 3: Memproses draf via Gemini 2.5 Flash...")
-            full_prompt = f"{system_prompt}\n\nBerita yang dianalisis:\n{user_txt}"
+            print("Langkah 3: Gemini 2.5 Flash...")
+            full_prompt = f"{system_prompt}\n\nBerita:\n{user_txt}"
             res = genai_client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=full_prompt,
-                config={
-                    "response_mime_type": "application/json"
-                }
+                config={"response_mime_type": "application/json"}
             )
             raw = res.text.strip()
             raw = re.sub(r"^```json\s*|\s*```$", "", raw).strip()
             return json.loads(raw)
         except Exception as e:
-            print(f"Gemini Flash terkendala: {e}")
+            print(f"Gemini gagal: {e}")
 
-    raise RuntimeError("Seluruh mesin AI (Groq, GitHub Models, Gemini) gagal memproses draf berita.")
+    raise RuntimeError("Semua engine AI gagal memproses draf berita.")
 
 def build_full_article_text():
     d = state["converter_data"]
@@ -339,82 +324,78 @@ def build_full_article_text():
         f"#CampersMagz #InfoGunung #PendakiIndonesia #SafetyHiking"
     )
 
-# ==========================================
 # 5. DESAIN COVER PERSIS KOORDINAT
-# ==========================================
 def draw_tent_icon(draw, x, y, size=48, color=(130, 134, 138)):
     w = size
     h = int(size * 0.85)
     draw.line([(x, y + h), (x + w // 2 + 5, y - 8)], fill=color, width=2)
     draw.line([(x + w, y + h), (x + w // 2 - 5, y - 8)], fill=color, width=2)
     draw.polygon([(x + w // 2, y), (x, y + h), (x + w, y + h)], outline=color, width=2)
-    draw.polygon([(x + w // 2, y + int(h * 0.45)), (x + int(w * 0.35), y + h), (x + int(w * 0.65), y + h)], outline=color, width=2)
+    p1 = (x + w // 2, y + int(h * 0.45))
+    p2 = (x + int(w * 0.35), y + h)
+    p3 = (x + int(w * 0.65), y + h)
+    draw.polygon([p1, p2, p3], outline=color, width=2)
 
 def draw_top_dark_logo_exact(canvas):
-    target_x = 485
-    target_y = 108
-    target_w, target_h = 110, 110
+    tx, ty, tw, th = 485, 108, 110, 110
     dark_grey = (82, 86, 89, 255)
-
-    logo_file = find_asset_file(["logo_top_dark.png"], ["top dark", "cover atas", "logo top dark", "logo atas"])
+    kws = ["top dark", "cover atas", "logo top dark", "logo atas"]
+    logo_file = find_asset_file(["logo_top_dark.png"], kws)
     if logo_file:
         try:
             l_img = Image.open(logo_file).convert("RGBA")
             bbox = l_img.getbbox()
             if bbox:
                 l_img = l_img.crop(bbox)
-            l_img = l_img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+            l_img = l_img.resize((tw, th), Image.Resampling.LANCZOS)
             _, _, _, a = l_img.split()
             colored = Image.new("RGBA", l_img.size, dark_grey)
             colored.putalpha(a)
-            canvas.alpha_composite(colored, (target_x, target_y))
+            canvas.alpha_composite(colored, (tx, ty))
             return
         except Exception as e:
-            print(f"Error load logo atas: {e}")
+            print(f"Logo atas error: {e}")
 
     draw = ImageDraw.Draw(canvas)
-    draw.ellipse([target_x, target_y, target_x + target_w, target_y + target_h], fill=dark_grey)
-    draw.ellipse([target_x + 20, target_y + 8, target_x + target_w - 6, target_y + target_h - 18], fill=(255, 255, 255, 255))
-    draw.polygon([(target_x + 30, target_y + 84), (target_x + 50, target_y + 44), (target_x + 70, target_y + 84)], fill=dark_grey)
+    draw.ellipse([tx, ty, tx + tw, ty + th], fill=dark_grey)
+    draw.ellipse([tx + 20, ty + 8, tx + tw - 6, ty + th - 18], fill=(255, 255, 255, 255))
 
 def draw_bottom_logo_exact(canvas):
-    target_x = 87
-    target_y = 1817
-    target_w, target_h = 194, 30
-
-    logo_file = find_asset_file(["Logo_cover_kiri_bawah.png", "logo_cover_kiri_bawah.png"], ["kiri bawah", "logo cover kiri bawah", "bottom"])
+    tx, ty, tw, th = 87, 1817, 194, 30
+    exact = ["Logo_cover_kiri_bawah.png", "logo_cover_kiri_bawah.png"]
+    kws = ["kiri bawah", "logo cover kiri bawah", "bottom"]
+    logo_file = find_asset_file(exact, kws)
     if logo_file:
         try:
             l_bot = Image.open(logo_file).convert("RGBA")
             bbox = l_bot.getbbox()
             if bbox:
                 l_bot = l_bot.crop(bbox)
-            l_bot = l_bot.resize((target_w, target_h), Image.Resampling.LANCZOS)
-            canvas.alpha_composite(l_bot, (target_x, target_y))
+            l_bot = l_bot.resize((tw, th), Image.Resampling.LANCZOS)
+            canvas.alpha_composite(l_bot, (tx, ty))
             return
         except Exception as e:
-            print(f"Error load logo kiri bawah: {e}")
+            print(f"Logo bawah error: {e}")
 
     draw = ImageDraw.Draw(canvas)
-    font_brand_big = get_nunito_font(28, bold=True)
-    draw.text((target_x, target_y - 2), "CAMPERSMAGZ", font=font_brand_big, fill=(255, 255, 255, 255))
+    f_b = get_nunito_font(28, bold=True)
+    draw.text((tx, ty - 2), "CAMPERSMAGZ", font=f_b, fill=(255, 255, 255, 255))
 
 def create_converter_cover():
     W, H = 1080, 1920
     canvas = Image.new("RGBA", (W, H), (255, 255, 255, 255))
     draw = ImageDraw.Draw(canvas)
-
     text_dark = (82, 86, 89, 255)
     pill_bg = (224, 224, 224, 255)
     footer_grey_hex = "#616264"
 
     draw_top_dark_logo_exact(canvas)
-
     judul = state["selected_title"].strip()
     kata_kunci = state["converter_data"].get("kata_kunci_utama", "Info Gunung").strip()
 
     if not state["is_ai_art"]:
-        kw_size = 96 if len(kata_kunci) <= 8 else (78 if len(kata_kunci) <= 13 else 64)
+        kw_len = len(kata_kunci)
+        kw_size = 96 if kw_len <= 8 else (78 if kw_len <= 13 else 64)
         font_big = get_nunito_font(kw_size, bold=True)
         font_sub = get_nunito_font(44, bold=False)
 
@@ -424,10 +405,9 @@ def create_converter_cover():
 
         pill_y1 = 460 + kw_h - 18
         draw.rounded_rectangle([85, pill_y1, 85 + kw_w + 20, pill_y1 + 34], radius=16, fill=pill_bg)
-
         draw.text((90, 460), kata_kunci, font=font_big, fill=text_dark)
         tent_x = min(90 + kw_w + 12, W - 120)
-        draw_tent_icon(draw, tent_x, 450, size=int(kw_size * 0.5), color=(130, 134, 138))
+        draw_tent_icon(draw, tent_x, 450, size=int(kw_size * 0.5))
 
         words = judul.split()
         lines, cur = [], []
@@ -447,24 +427,20 @@ def create_converter_cover():
         if os.path.exists(state["cover_source_img"]):
             src_img = Image.open(state["cover_source_img"]).convert("RGBA")
             box_w, box_h = 870, 520
-            img_ratio = src_img.width / src_img.height
-            box_ratio = box_w / box_h
-            if img_ratio > box_ratio:
-                nh = box_h
-                nw = int(box_h * img_ratio)
+            img_r = src_img.width / src_img.height
+            box_r = box_w / box_h
+            if img_r > box_r:
+                nh, nw = box_h, int(box_h * img_r)
             else:
-                nw = box_w
-                nh = int(box_w / img_ratio)
+                nw, nh = box_w, int(box_w / img_r)
             src_img = src_img.resize((nw, nh), Image.Resampling.LANCZOS)
-            left = (nw - box_w) // 2
-            top = (nh - box_h) // 2
+            left, top = (nw - box_w) // 2, (nh - box_h) // 2
             src_img = src_img.crop((left, top, left + box_w, top + box_h))
 
             mask = Image.new("L", (box_w, box_h), 0)
-            mask_draw = ImageDraw.Draw(mask)
-            mask_draw.rounded_rectangle([0, 0, box_w, box_h], radius=38, fill=255)
+            m_draw = ImageDraw.Draw(mask)
+            m_draw.rounded_rectangle([0, 0, box_w, box_h], radius=38, fill=255)
             canvas.paste(src_img, (105, 870), mask)
-
     else:
         if os.path.exists(state["cover_source_img"]):
             art_img = Image.open(state["cover_source_img"]).convert("RGBA")
@@ -473,7 +449,6 @@ def create_converter_cover():
 
         font_reg = get_nunito_font(50, bold=False)
         font_bld = get_nunito_font(50, bold=True)
-
         words = judul.split()
         lines, cur = [], []
         for w in words:
@@ -486,31 +461,30 @@ def create_converter_cover():
 
         y_txt = 540
         for idx_l, line in enumerate(lines[:3]):
-            use_font = font_bld if idx_l == len(lines[:3]) - 1 else font_reg
-            bbox = draw.textbbox((0, 0), line, font=use_font)
+            use_f = font_bld if idx_l == len(lines[:3]) - 1 else font_reg
+            bbox = draw.textbbox((0, 0), line, font=use_f)
             tw = bbox[2] - bbox[0]
             tx = (W - tw) // 2
-            draw.text((tx, y_txt), line, font=use_font, fill=text_dark)
+            draw.text((tx, y_txt), line, font=use_f, fill=text_dark)
             if idx_l == 0:
-                draw_tent_icon(draw, tx + tw + 10, y_txt - 35, size=48, color=(130, 134, 138))
+                draw_tent_icon(draw, tx + tw + 10, y_txt - 35, size=48)
             y_txt += 72
 
     draw.rounded_rectangle([60, 1805, 1020, 1862], radius=28, fill=footer_grey_hex)
     draw_bottom_logo_exact(canvas)
 
-    font_credit = get_nunito_font(16, bold=False)
-    sumber_kredit = "foto: gemini" if state["is_ai_art"] else f"foto: {state['converter_data']['sumber_media'].lower()}"
-    bbox_cr = draw.textbbox((0, 0), sumber_kredit, font=font_credit)
+    font_cr = get_nunito_font(16, bold=False)
+    med = state["converter_data"]["sumber_media"].lower()
+    sumber_kr = "foto: gemini" if state["is_ai_art"] else f"foto: {med}"
+    bbox_cr = draw.textbbox((0, 0), sumber_kr, font=font_cr)
     cr_w = bbox_cr[2] - bbox_cr[0]
-    draw.text((980 - cr_w, 1822), sumber_kredit, font=font_credit, fill=(255, 255, 255, 255))
+    draw.text((980 - cr_w, 1822), sumber_kr, font=font_cr, fill=(255, 255, 255, 255))
 
     out_img = canvas.convert("RGB")
     out_img.save(state["final_cover_img"])
     return state["final_cover_img"]
 
-# ==========================================
 # 6. OVERLAY VIDEO REELS (9:16)
-# ==========================================
 def draw_centered_video_text(base_img, y_pos, text, font, text_color=(255, 255, 255, 255)):
     W, _ = base_img.size
     draw = ImageDraw.Draw(base_img)
@@ -522,20 +496,19 @@ def draw_centered_video_text(base_img, y_pos, text, font, text_color=(255, 255, 
         draw.text((x_pos + ox, y_pos + oy), text, font=font, fill=(0, 0, 0, 150))
 
     if text.endswith("!!") or text.endswith("!?") or text.endswith("!"):
-        split_len = 2 if (text.endswith("!!") or text.endswith("!?")) else 1
-        main_part = text[:-split_len]
-        mark_part = text[-split_len:] + ("!" if split_len == 1 else "")
-        bbox_main = draw.textbbox((0, 0), main_part, font=font)
-        mw = bbox_main[2] - bbox_main[0]
-        draw.text((x_pos, y_pos), main_part, font=font, fill=text_color)
-        draw.text((x_pos + mw, y_pos), mark_part, font=font, fill=(235, 30, 30, 255))
+        s_len = 2 if (text.endswith("!!") or text.endswith("!?")) else 1
+        main_p = text[:-s_len]
+        mark_p = text[-s_len:] + ("!" if s_len == 1 else "")
+        bbox_m = draw.textbbox((0, 0), main_p, font=font)
+        mw = bbox_m[2] - bbox_m[0]
+        draw.text((x_pos, y_pos), main_p, font=font, fill=text_color)
+        draw.text((x_pos + mw, y_pos), mark_p, font=font, fill=(235, 30, 30, 255))
     else:
         draw.text((x_pos, y_pos), text, font=font, fill=text_color)
 
 def create_video_overlay(custom_source=None):
     W, H = 1080, 1920
     canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-
     logo_file = find_asset_file(["logo_top.png", "logo.png"], ["top", "atas"])
     if logo_file:
         try:
@@ -567,214 +540,183 @@ def create_video_overlay(custom_source=None):
 
     font_source = get_nunito_font(27, bold=True)
     font_brand = get_nunito_font(42, bold=True)
-    sumber_label = custom_source if custom_source else f"Foto: {state['converter_data']['sumber_media']}"
-    draw_centered_video_text(canvas, 1730, sumber_label, font_source, (240, 240, 240, 255))
+    med = state["converter_data"]["sumber_media"]
+    sumber_lbl = custom_source if custom_source else f"Foto: {med}"
+    draw_centered_video_text(canvas, 1730, sumber_lbl, font_source, (240, 240, 240, 255))
     draw_centered_video_text(canvas, 1775, "CAMPERSMAGZ", font_brand, (255, 255, 255, 255))
 
     out_path = "overlay_frame.png"
     canvas.save(out_path)
     return out_path
 
-# ==========================================
 # 7. MOOD SYNTHESIZER & FFMPEG RENDERER
-# ==========================================
 def prepare_mood_audio(mood="chill", duration=12):
     mood = str(mood).lower().strip()
     if mood not in ["urgent", "somber", "upbeat", "chill"]:
         mood = "chill"
-
-    custom_file = f"bgm_{mood}.mp3"
-    if os.path.exists(custom_file):
-        return custom_file
+    custom_f = f"bgm_{mood}.mp3"
+    if os.path.exists(custom_f):
+        return custom_f
     elif os.path.exists("bgm.mp3"):
         return "bgm.mp3"
 
-    output_audio = f"synth_{mood}.mp3"
+    out_aud = f"synth_{mood}.mp3"
     if mood == "urgent":
-        expr = "0.25*sin(2*PI*110*t)+0.15*sin(2*PI*130.81*t)+0.12*sin(2*PI*164.81*t)*(1+0.6*sin(2*PI*2.5*t))"
+        expr = "0.25*sin(2*PI*110*t)+0.15*sin(2*PI*130.81*t)"
     elif mood == "somber":
-        expr = "0.25*sin(2*PI*98*t)+0.15*sin(2*PI*116.54*t)+0.15*sin(2*PI*146.83*t)"
+        expr = "0.25*sin(2*PI*98*t)+0.15*sin(2*PI*116.54*t)"
     elif mood == "upbeat":
-        expr = "0.2*sin(2*PI*261.63*t)+0.15*sin(2*PI*329.63*t)+0.15*sin(2*PI*392.00*t)"
+        expr = "0.2*sin(2*PI*261.63*t)+0.15*sin(2*PI*329.63*t)"
     else:
-        expr = "0.2*sin(2*PI*174.61*t)+0.15*sin(2*PI*220*t)+0.15*sin(2*PI*261.63*t)"
+        expr = "0.2*sin(2*PI*174.61*t)+0.15*sin(2*PI*220*t)"
 
     cmd = [
         "ffmpeg", "-y", "-f", "lavfi",
         "-i", f"aevalsrc={expr}:s=44100:d={duration}",
-        "-af", "lowpass=f=1000",
-        output_audio
+        "-af", "lowpass=f=1000", out_aud
     ]
     subprocess.run(cmd, check=True)
-    return output_audio
+    return out_aud
 
 def render_final_video(mode="pan_image", add_instrumental=True):
-    overlay_png = create_video_overlay(
-        custom_source=state["custom_source_text"] if mode == "user_video" else None
-    )
+    c_src = state["custom_source_text"] if mode == "user_video" else None
+    overlay_png = create_video_overlay(custom_source=c_src)
     output_mp4 = "final_campersmagz_reel.mp4"
-    mood_berita = state["converter_data"].get("mood_musik", "chill")
-    bgm_path = prepare_mood_audio(mood=mood_berita, duration=15) if add_instrumental else None
-    has_bgm = (bgm_path is not None and os.path.exists(bgm_path))
+    mood_b = state["converter_data"].get("mood_musik", "chill")
+    bgm_p = prepare_mood_audio(mood=mood_b, duration=15) if add_instrumental else None
+    has_bgm = (bgm_p is not None and os.path.exists(bgm_p))
 
     if mode == "pan_image":
-        vf_filter = (
+        vf = (
             "[0:v]scale=1350:1920:force_original_aspect_ratio=increase,"
             "crop=1080:1920:(iw-ow)*t/5:(ih-oh)/2[bg];"
             "[bg][1:v]overlay=0:0[outv]"
         )
-        cmd = ["ffmpeg", "-y", "-loop", "1", "-t", "5", "-i", state["cover_source_img"], "-i", overlay_png]
+        cmd = [
+            "ffmpeg", "-y", "-loop", "1", "-t", "5",
+            "-i", state["cover_source_img"], "-i", overlay_png
+        ]
         if has_bgm:
-            cmd += [
-                "-i", bgm_path,
-                "-filter_complex", vf_filter + ";[2:a]afade=t=out:st=3.5:d=1.5[outa]",
-                "-map", "[outv]", "-map", "[outa]"
-            ]
+            fc = vf + ";[2:a]afade=t=out:st=3.5:d=1.5[outa]"
+            cmd += ["-i", bgm_p, "-filter_complex", fc, "-map", "[outv]", "-map", "[outa]"]
         else:
-            cmd += ["-filter_complex", vf_filter, "-map", "[outv]"]
-        cmd += ["-t", "5", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-shortest", output_mp4]
-
+            cmd += ["-filter_complex", vf, "-map", "[outv]"]
+        cmd += [
+            "-t", "5", "-c:v", "libx264", "-preset", "ultrafast",
+            "-pix_fmt", "yuv420p", "-shortest", output_mp4
+        ]
     else:
-        probe = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", state["uploaded_video_path"]],
-            capture_output=True, text=True
-        )
+        p_cmd = [
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", state["uploaded_video_path"]
+        ]
+        probe = subprocess.run(p_cmd, capture_output=True, text=True)
         try:
             dur = float(probe.stdout.strip())
         except:
             dur = 8.0
-        fade_start = max(0.5, dur - 2.0)
+        f_st = max(0.5, dur - 2.0)
 
-        probe_audio = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", state["uploaded_video_path"]],
-            capture_output=True, text=True
-        )
-        video_has_audio = bool(probe_audio.stdout.strip())
+        pa_cmd = [
+            "ffprobe", "-v", "error", "-select_streams", "a",
+            "-show_entries", "stream=index", "-of", "csv=p=0", state["uploaded_video_path"]
+        ]
+        probe_a = subprocess.run(pa_cmd, capture_output=True, text=True)
+        vid_has_a = bool(probe_a.stdout.strip())
 
-        vf_filter = (
+        vf = (
             "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
-            "crop=1080:1920[bg];"
-            "[bg][1:v]overlay=0:0[outv]"
+            "crop=1080:1920[bg];[bg][1:v]overlay=0:0[outv]"
         )
         cmd = ["ffmpeg", "-y", "-i", state["uploaded_video_path"], "-i", overlay_png]
         if has_bgm:
-            bgm_actual = prepare_mood_audio(mood=mood_berita, duration=int(dur) + 3)
-            cmd += ["-i", bgm_actual]
-            if video_has_audio:
-                cmd += [
-                    "-filter_complex", f"{vf_filter};[2:a]afade=t=out:st={fade_start}:d=2[bgm];[0:a][bgm]amix=inputs=2:duration=first[outa]",
-                    "-map", "[outv]", "-map", "[outa]"
-                ]
+            bgm_act = prepare_mood_audio(mood=mood_b, duration=int(dur) + 3)
+            cmd += ["-i", bgm_act]
+            if vid_has_a:
+                fc = f"{vf};[2:a]afade=t=out:st={f_st}:d=2[bgm];[0:a][bgm]amix=inputs=2:duration=first[outa]"
             else:
-                cmd += [
-                    "-filter_complex", f"{vf_filter};[2:a]afade=t=out:st={fade_start}:d=2[outa]",
-                    "-map", "[outv]", "-map", "[outa]"
-                ]
+                fc = f"{vf};[2:a]afade=t=out:st={f_st}:d=2[outa]"
+            cmd += ["-filter_complex", fc, "-map", "[outv]", "-map", "[outa]"]
         else:
-            cmd += ["-filter_complex", vf_filter, "-map", "[outv]"]
-            if video_has_audio:
+            cmd += ["-filter_complex", vf, "-map", "[outv]"]
+            if vid_has_a:
                 cmd += ["-map", "0:a"]
-
         cmd += ["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-shortest", output_mp4]
 
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    for line in process.stdout:
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    for line in proc.stdout:
         print(line, end="")
-    process.wait()
-
-    if process.returncode != 0:
+    proc.wait()
+    if proc.returncode != 0:
         raise RuntimeError("FFmpeg gagal merender video.")
     return output_mp4
 
-# ==========================================
 # 8. HANDLER INTERAKTIF TELEGRAM
-# ==========================================
 def send_news_candidate():
     if state["current_idx"] >= len(state["articles"]):
         bot.send_message(TELEGRAM_CHAT_ID, "⚠️ Semua berita terbaru sudah ditampilkan.")
         bot.stop_polling()
         return
-
     art = state["articles"][state["current_idx"]]
     state["article"] = art
-
     markup = InlineKeyboardMarkup()
     markup.row(
         InlineKeyboardButton("✅ Pilih Berita Ini", callback_data="news_accept"),
         InlineKeyboardButton("🔄 Pilih Berita Lain", callback_data="news_next")
     )
-    msg = f"📰 *KANDIDAT BERITA #{state['current_idx'] + 1}*\n\n*{art.title}*\n\n🔗 {art.link}"
+    idx_num = state["current_idx"] + 1
+    msg = f"📰 *KANDIDAT BERITA #{idx_num}*\n\n*{art.title}*\n\n🔗 {art.link}"
     bot.send_message(TELEGRAM_CHAT_ID, msg, parse_mode="Markdown", reply_markup=markup)
 
 def send_cover_preview(cover_path):
-    mood_terdeteksi = state["converter_data"].get("mood_musik", "chill").upper()
+    mood_t = state["converter_data"].get("mood_musik", "chill").upper()
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("🖼️ Pilih Gambar Ini Sebagai Cover", callback_data="cover_keep"))
     markup.add(InlineKeyboardButton("🍌 Generate Cover dengan Nano Banana", callback_data="cover_nano"))
     markup.add(InlineKeyboardButton("📤 Upload Foto Cover Sendiri", callback_data="cover_upload"))
-
+    cap_txt = f"📌 *Preview Cover (Format Asli News Converter)*\n🎵 Suasana Musik: `{mood_t}`"
     with open(cover_path, "rb") as ph:
-        bot.send_photo(
-            TELEGRAM_CHAT_ID, ph,
-            caption=f"📌 *Preview Cover (Format Asli News Converter)*\n🎵 Suasana Musik: `{mood_terdeteksi}`",
-            parse_mode="Markdown", reply_markup=markup
-        )
+        bot.send_photo(TELEGRAM_CHAT_ID, ph, caption=cap_txt, parse_mode="Markdown", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     try:
         data = call.data
-
         if data == "news_next":
             state["current_idx"] += 1
             bot.answer_callback_query(call.id, "Mencari berita lain...")
             send_news_candidate()
-
         elif data == "news_accept":
             bot.answer_callback_query(call.id, "Memproses draf...")
             bot.send_message(TELEGRAM_CHAT_ID, "⏳ Mengambil foto asli berita & menyusun Cover...")
-
             extract_article_image(state["article"])
             state["converter_data"] = generate_converter_content(state["article"])
             state["selected_title"] = state["converter_data"]["opsi_judul"][0]
-
             cover_path = create_converter_cover()
             send_cover_preview(cover_path)
-
         elif data == "cover_nano":
             bot.answer_callback_query(call.id, "Menjalankan Nano Banana...")
-            bot.send_message(TELEGRAM_CHAT_ID, "🎨 Sedang membuat Graphic Art dengan Nano Banana...")
+            bot.send_message(TELEGRAM_CHAT_ID, "🎨 Membuat Graphic Art dengan Nano Banana...")
             generate_nano_banana_art(state["converter_data"]["art_prompt"])
-
             cover_path = create_converter_cover()
             send_cover_preview(cover_path)
-
         elif data == "cover_upload":
             state["waiting_for_cover_upload"] = True
             bot.answer_callback_query(call.id, "Silakan upload foto...")
-            bot.send_message(
-                TELEGRAM_CHAT_ID,
-                "📤 *Silakan kirim/upload FOTO untuk cover sekarang.*\n"
-                "Foto akan otomatis disesuaikan ke format rounded rectangle di cover.",
-                parse_mode="Markdown"
-            )
-
+            bot.send_message(TELEGRAM_CHAT_ID, "📤 *Silakan kirim FOTO untuk cover sekarang.*", parse_mode="Markdown")
         elif data == "cover_keep":
             bot.answer_callback_query(call.id, "Cover dikunci!")
             send_title_options()
-
         elif data.startswith("title_"):
             idx = int(data.split("_")[1])
             state["selected_title"] = state["converter_data"]["opsi_judul"][idx]
             create_converter_cover()
             bot.answer_callback_query(call.id, "Judul ditetapkan!")
             send_caption_review()
-
         elif data == "cap_regen":
             bot.answer_callback_query(call.id, "Membuat caption lain...")
             state["converter_data"] = generate_converter_content(state["article"])
             send_caption_review()
-
         elif data == "cap_keep":
             bot.answer_callback_query(call.id, "Caption dikunci!")
             markup = InlineKeyboardMarkup()
@@ -783,33 +725,23 @@ def handle_callbacks(call):
                 InlineKeyboardButton("📤 Upload Video", callback_data="vid_upload")
             )
             bot.send_message(TELEGRAM_CHAT_ID, "🎬 *PILIH OPSI PEMBUATAN VIDEO:*", parse_mode="Markdown", reply_markup=markup)
-
         elif data == "vid_no_upload":
             bot.answer_callback_query(call.id, "Merender video 5 detik...")
-            mood = state["converter_data"].get("mood_musik", "chill").upper()
-            bot.send_message(TELEGRAM_CHAT_ID, f"⚙️ Merender video Pan 5 detik + Audio (`{mood}`) dengan Fade Out...")
+            bot.send_message(TELEGRAM_CHAT_ID, "⚙️ Merender video Pan 5 detik + Audio Fade Out...")
             mp4 = render_final_video(mode="pan_image", add_instrumental=True)
             send_final_package(mp4)
-
         elif data == "vid_upload":
             state["waiting_for_video_upload"] = True
             bot.answer_callback_query(call.id, "Silakan upload video...")
-            bot.send_message(
-                TELEGRAM_CHAT_ID,
-                "📤 *Silakan upload video Anda sekarang.*\n"
-                "Tulis sumbernya di bagian *Caption* saat mengirim video (contoh: `tiktok/gabriel_iqbal`).",
-                parse_mode="Markdown"
-            )
-
+            bot.send_message(TELEGRAM_CHAT_ID, "📤 *Silakan upload video Anda beserta sumber di Caption.*", parse_mode="Markdown")
         elif data in ["bgm_yes", "bgm_no"]:
             add_bgm = (data == "bgm_yes")
             bot.answer_callback_query(call.id, "Mengedit video...")
-            bot.send_message(TELEGRAM_CHAT_ID, "⚙️ Sedang mengedit video sesuai format Reels CampersMagz...")
+            bot.send_message(TELEGRAM_CHAT_ID, "⚙️ Mengedit video sesuai format Reels CampersMagz...")
             mp4 = render_final_video(mode="user_video", add_instrumental=add_bgm)
             send_final_package(mp4)
-
     except Exception as e:
-        print(f"Error pada callback: {e}")
+        print(f"Callback error: {e}")
         bot.send_message(TELEGRAM_CHAT_ID, f"⚠️ Terjadi kendala teknis: `{e}`", parse_mode="Markdown")
 
 def send_title_options():
@@ -834,62 +766,54 @@ def send_caption_review():
 def handle_user_cover_photo(message):
     if not state["waiting_for_cover_upload"]:
         return
-    bot.send_message(TELEGRAM_CHAT_ID, "⏳ Mengunduh foto cover Anda & menyusun ulang desain...")
-    file_info = bot.get_file(message.photo[-1].file_id)
-    downloaded = bot.download_file(file_info.file_path)
+    bot.send_message(TELEGRAM_CHAT_ID, "⏳ Mengunduh foto cover & menyusun ulang...")
+    f_info = bot.get_file(message.photo[-1].file_id)
+    dl = bot.download_file(f_info.file_path)
     with open(state["cover_source_img"], "wb") as f:
-        f.write(downloaded)
-
+        f.write(dl)
     state["is_ai_art"] = False
     state["waiting_for_cover_upload"] = False
-    new_cover = create_converter_cover()
-    bot.send_message(TELEGRAM_CHAT_ID, "✅ *Foto berhasil dipasang pada cover!*", parse_mode="Markdown")
-    send_cover_preview(new_cover)
+    new_cov = create_converter_cover()
+    send_cover_preview(new_cov)
 
 @bot.message_handler(content_types=["video"])
 def handle_user_video(message):
     if not state["waiting_for_video_upload"]:
         return
     bot.send_message(TELEGRAM_CHAT_ID, "⏳ Mengunduh video Anda...")
-    file_info = bot.get_file(message.video.file_id)
-    downloaded = bot.download_file(file_info.file_path)
+    f_info = bot.get_file(message.video.file_id)
+    dl = bot.download_file(f_info.file_path)
     with open(state["uploaded_video_path"], "wb") as f:
-        f.write(downloaded)
-
-    sumber_raw = message.caption.strip() if message.caption else state["converter_data"]["sumber_media"]
-    if not sumber_raw.lower().startswith(("video:", "foto:")):
-        sumber_raw = f"Video: {sumber_raw}"
-    state["custom_source_text"] = sumber_raw
+        f.write(dl)
+    med = state["converter_data"]["sumber_media"]
+    s_raw = message.caption.strip() if message.caption else med
+    if not s_raw.lower().startswith(("video:", "foto:")):
+        s_raw = f"Video: {s_raw}"
+    state["custom_source_text"] = s_raw
     state["waiting_for_video_upload"] = False
-
     mood = state["converter_data"].get("mood_musik", "chill").upper()
     markup = InlineKeyboardMarkup()
     markup.row(
-        InlineKeyboardButton(f"🎵 Isi Suara Instrumental ({mood})", callback_data="bgm_yes"),
-        InlineKeyboardButton("🔇 Tidak Isi Suara Instrumental", callback_data="bgm_no")
+        InlineKeyboardButton(f"🎵 Instrumental ({mood})", callback_data="bgm_yes"),
+        InlineKeyboardButton("🔇 Tanpa Instrumental", callback_data="bgm_no")
     )
-    bot.send_message(TELEGRAM_CHAT_ID, "🎶 *Pilih opsi audio untuk video ini:*", parse_mode="Markdown", reply_markup=markup)
+    bot.send_message(TELEGRAM_CHAT_ID, "🎶 *Pilih opsi audio video:*", parse_mode="Markdown", reply_markup=markup)
 
 def send_final_package(mp4_path):
     full_text = build_full_article_text()
     judul = state["selected_title"]
-
     with open(state["final_cover_img"], "rb") as cov:
-        bot.send_photo(TELEGRAM_CHAT_ID, cov, caption="✅ *COVER FINAL (FORMAT CONVERTER)*", parse_mode="Markdown")
-
-    video_caption = (
-        f"⛺ *{judul}*\n\n"
-        f"🔗 Sumber: {state['converter_data']['sumber_media']}\n"
-        f"#CampersMagz #InfoGunung #PendakiIndonesia #SafetyHiking"
-    )
-
+        bot.send_photo(TELEGRAM_CHAT_ID, cov, caption="✅ *COVER FINAL*", parse_mode="Markdown")
+    med = state["converter_data"]["sumber_media"]
+    v_cap = f"⛺ *{judul}*\n🔗 Sumber: {med}\n#CampersMagz #InfoGunung"
     with open(mp4_path, "rb") as vid:
-        bot.send_video(TELEGRAM_CHAT_ID, vid, caption=video_caption, parse_mode="Markdown")
+        bot.send_video(TELEGRAM_CHAT_ID, vid, caption=v_cap, parse_mode="Markdown")
+    bot.send_message(TELEGRAM_CHAT_ID, f"📝 *CAPTION LENGKAP:*\n\n{full_text}", parse_mode="Markdown")
+    bot.send_message(TELEGRAM_CHAT_ID, "🎉 *Selesai!* Konten siap di-upload.", parse_mode="Markdown")
+    bot.stop_polling()
 
-    bot.send_message(
-        TELEGRAM_CHAT_ID,
-        f"📝 *DRAF CAPTION LENGKAP UNTUK POSTING:*\n(Salin teks di bawah ini)\n\n{full_text}",
-        parse_mode="Markdown"
-    )
-
-    bot.send_message(TELEGRAM_CHAT_ID, "🎉 *Selesai!* Seluruh paket konten sudah siap di-upload ke Instagram
+if __name__ == "__main__":
+    fetch_articles()
+    send_news_candidate()
+    bot.infinity_polling(timeout=20, long_polling_timeout=10)
+# === END OF SCRIPT ===
