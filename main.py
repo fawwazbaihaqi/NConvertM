@@ -88,7 +88,6 @@ def get_nunito_font(size, bold=True):
     return ImageFont.load_default()
 
 def get_video_title_font(size=42):
-    """Font Classic2 CapCut: prioritaskan file lokal Classic2.ttf, fallback ke PlayfairDisplay-Bold"""
     candidates = ["Classic2.ttf", "Classic 2.ttf", "classic2.ttf", "PlayfairDisplay-Bold.ttf"]
     for cand in candidates:
         if os.path.exists(cand):
@@ -99,7 +98,6 @@ def get_video_title_font(size=42):
     return ImageFont.load_default()
 
 def get_video_system_font(size=16):
-    """Font 'system' CapCut: Roboto-Regular"""
     candidates = ["System.ttf", "system.ttf", "Roboto-Regular.ttf"]
     for cand in candidates:
         if os.path.exists(cand):
@@ -215,34 +213,65 @@ def extract_article_image(article_entry):
 def generate_nano_banana_art(prompt_subject):
     state["is_ai_art"] = True
     if not GEMINI_API_KEY:
-        img = Image.new("RGB", (1024, 1024), color="#FFFFFF")
-        img.save(state["cover_source_img"])
+        print("GEMINI_API_KEY kosong, tidak dapat memanggil Nano Banana.")
         return False
-    try:
-        prompt = (
-            f"2D editorial comic cartoon vector illustration of {prompt_subject}, "
-            f"Indonesian mountain hiker scene, clean bold black ink outlines, "
-            f"vibrant flat colors, subject centered and isolated on a solid pure "
-            f"white background (#FFFFFF), blank white space at top, no text, no watermark."
-        )
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key={GEMINI_API_KEY}"
-        payload = {"contents": [{"parts": [{"text": prompt}]}]}
-        r = requests.post(url, json=payload, timeout=35)
-        if r.status_code == 200:
-            data = r.json()
-            parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
-            for p in parts:
-                if "inlineData" in p:
-                    b64_str = p["inlineData"]["data"]
-                    img_bytes = base64.b64decode(b64_str)
-                    img = Image.open(BytesIO(img_bytes)).convert("RGB")
-                    img.save(state["cover_source_img"])
-                    return True
-    except Exception as e:
-        print(f"Error Nano Banana REST: {e}")
 
-    img = Image.new("RGB", (1024, 1024), color="#FFFFFF")
-    img.save(state["cover_source_img"])
+    prompt = (
+        f"2D editorial comic cartoon vector illustration of {prompt_subject}, "
+        f"Indonesian mountain hiker character scene, clean bold black ink outlines, "
+        f"vibrant flat colors, subject centered and isolated on a solid pure clean "
+        f"white background (#FFFFFF), blank empty white space at top, no text, no watermark."
+    )
+
+    models_to_try = [
+        "gemini-2.5-flash-image",
+        "gemini-3.1-flash-image"
+    ]
+
+    for model_name in models_to_try:
+        try:
+            print(f"Memanggil Nano Banana ({model_name})...")
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+            payload = {
+                "contents": [
+                    {"parts": [{"text": prompt}]}
+                ],
+                "generationConfig": {
+                    "responseModalities": ["TEXT", "IMAGE"]
+                }
+            }
+            r = requests.post(url, json=payload, timeout=40)
+            if r.status_code == 200:
+                data = r.json()
+                candidates = data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    for p in parts:
+                        inline = p.get("inlineData") or p.get("inline_data")
+                        if inline and "data" in inline:
+                            b64_str = inline["data"]
+                            img_bytes = base64.b64decode(b64_str)
+                            img = Image.open(BytesIO(img_bytes)).convert("RGB")
+                            img.save(state["cover_source_img"])
+                            print(f"SUKSES membuat gambar dengan {model_name}!")
+                            return True
+            else:
+                print(f"Nano Banana {model_name} HTTP {r.status_code}: {r.text[:150]}")
+        except Exception as e:
+            print(f"Error Nano Banana {model_name}: {e}")
+
+    try:
+        print("Mencoba fallback visual Pollinations...")
+        q_enc = urllib.parse.quote(prompt)
+        p_url = f"https://image.pollinations.ai/prompt/{q_enc}?width=1024&height=1024&nologo=true"
+        pr = requests.get(p_url, timeout=25)
+        if pr.status_code == 200:
+            img = Image.open(BytesIO(pr.content)).convert("RGB")
+            img.save(state["cover_source_img"])
+            return True
+    except Exception as ex:
+        print(f"Fallback error: {ex}")
+
     return False
 
 # ==========================================
@@ -273,7 +302,7 @@ def generate_converter_content(article):
         '  "penutup_edukasi": "1 kalimat reflektif/pesan keselamatan berbobot yang menjadi punchline",\n'
         '  "cta": "Tepat SATU kalimat Call To Action yang relevan (fokus Save/Share/Komen/Follow)",\n'
         '  "sumber_media": "Nama media resmi sumber berita Title Case (contoh: Kompas.com / Detik.com)",\n'
-        '  "art_prompt": "Deskripsi kartun 2D singkat bahasa Inggris",\n'
+        '  "art_prompt": "Deskripsi adegan kartun 2D singkat bahasa Inggris",\n'
         '  "mood_musik": "Pilih satu: urgent, somber, upbeat, atau chill"\n'
         "}"
     )
@@ -283,7 +312,6 @@ def generate_converter_content(article):
 
     if GROQ_API_KEY:
         try:
-            print("Mencoba Tingkat 1: Groq API...")
             headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
             payload = {
                 "model": "qwen/qwen3.8-27b",
@@ -352,16 +380,27 @@ def build_full_article_text():
 # ==========================================
 # 5. DESAIN COVER PERSIS KOORDINAT
 # ==========================================
-def draw_tent_icon(draw, x, y, size=48, color=(130, 134, 138)):
-    w = size
-    h = int(size * 0.85)
-    draw.line([(x, y + h), (x + w // 2 + 5, y - 8)], fill=color, width=2)
-    draw.line([(x + w, y + h), (x + w // 2 - 5, y - 8)], fill=color, width=2)
-    draw.polygon([(x + w // 2, y), (x, y + h), (x + w, y + h)], outline=color, width=2)
-    p1 = (x + w // 2, y + int(h * 0.45))
-    p2 = (x + int(w * 0.35), y + h)
-    p3 = (x + int(w * 0.65), y + h)
-    draw.polygon([p1, p2, p3], outline=color, width=2)
+def draw_cover_tent_logo(canvas, right_x, top_y):
+    """Menempatkan Logo_tenda_cover.png di kanan atas huruf terakhir judul, kiri bawah logo menempel"""
+    tenda_file = find_asset_file(["Logo_tenda_cover.png", "logo_tenda_cover.png"], ["tenda cover", "logo tenda"])
+    if tenda_file:
+        try:
+            t_img = Image.open(tenda_file).convert("RGBA")
+            tw, th = t_img.size
+            tx = min(right_x, 1080 - tw - 15)
+            ty = top_y - th + 6
+            canvas.alpha_composite(t_img, (int(tx), int(ty)))
+            return
+        except Exception as e:
+            print(f"Error load Logo_tenda_cover: {e}")
+
+    # Fallback gambar vektor bila file belum ada
+    draw = ImageDraw.Draw(canvas)
+    w = 48
+    h = int(w * 0.85)
+    tx = min(right_x + 6, 1080 - w - 20)
+    ty = top_y - h
+    draw.polygon([(tx + w // 2, ty), (tx, ty + h), (tx + w, ty + h)], outline=(130, 134, 138), width=2)
 
 def draw_top_dark_logo_exact(canvas):
     tx, ty, tw, th = 485, 108, 110, 110
@@ -423,15 +462,16 @@ def create_converter_cover():
         font_big = get_nunito_font(kw_size, bold=True)
         font_sub = get_nunito_font(44, bold=False)
 
-        bbox_kw = draw.textbbox((0, 0), kata_kunci, font=font_big)
+        bbox_kw = draw.textbbox((90, 460), kata_kunci, font=font_big)
         kw_w = bbox_kw[2] - bbox_kw[0]
         kw_h = bbox_kw[3] - bbox_kw[1]
 
         pill_y1 = 460 + kw_h - 18
         draw.rounded_rectangle([85, pill_y1, 85 + kw_w + 20, pill_y1 + 34], radius=16, fill=pill_bg)
         draw.text((90, 460), kata_kunci, font=font_big, fill=text_dark)
-        tent_x = min(90 + kw_w + 12, W - 120)
-        draw_tent_icon(draw, tent_x, 450, size=int(kw_size * 0.5))
+        
+        # Logo tenda menempel di kanan atas huruf terakhir kata kunci
+        draw_cover_tent_logo(canvas, bbox_kw[2], bbox_kw[1])
 
         words = judul.split()
         lines, cur = [], []
@@ -491,26 +531,33 @@ def create_converter_cover():
             tx = (W - tw) // 2
             draw.text((tx, y_txt), line, font=use_f, fill=text_dark)
             if idx_l == 0:
-                draw_tent_icon(draw, tx + tw + 10, y_txt - 35, size=48)
+                l_bbox = draw.textbbox((tx, y_txt), line, font=use_f)
+                draw_cover_tent_logo(canvas, l_bbox[2], l_bbox[1])
             y_txt += 72
 
+    # Kapsul highlight abu-abu bawah (X: 60..1020, Y: 1805..1862)
     draw.rounded_rectangle([60, 1805, 1020, 1862], radius=28, fill=footer_grey_hex)
     draw_cover_bottom_logo(canvas)
 
-    # Sumber kanan bawah: Font Nunito ukuran 16 di X: 846 px, Y: 1819 px
+    # Sumber kanan bawah: font Nunito ukuran 16 diposisikan presisi di dalam kapsul abu-abu
     font_cr = get_nunito_font(16, bold=False)
     med = state["converter_data"]["sumber_media"].lower()
     sumber_kr = "foto: gemini" if state["is_ai_art"] else f"foto: {med}"
-    draw.text((846, 1819), sumber_kr, font=font_cr, fill=(255, 255, 255, 255))
+    bbox_cr = draw.textbbox((0, 0), sumber_kr, font=font_cr)
+    cr_w = bbox_cr[2] - bbox_cr[0]
+    cr_h = bbox_cr[3] - bbox_cr[1]
+    pos_x = 985 - cr_w
+    pos_y = 1805 + (57 - cr_h) // 2
+    draw.text((pos_x, pos_y), sumber_kr, font=font_cr, fill=(255, 255, 255, 255))
 
     out_img = canvas.convert("RGB")
     out_img.save(state["final_cover_img"])
     return state["final_cover_img"]
 
 # ==========================================
-# 6. OVERLAY VIDEO REELS (FORMAT CAPCUT CLASSIC2)
+# 6. OVERLAY VIDEO REELS (MAX 2 BARIS & CAPCUT CLASSIC2)
 # ==========================================
-def draw_video_title_with_stroke(base_img, y_pos, text, font, text_color=(255, 255, 255, 255), stroke_color="#a6a6a6", stroke_w=3):
+def draw_video_title_with_stroke(base_img, y_pos, text, font, text_color=(255, 255, 255, 255), stroke_color="#616264", stroke_w=3):
     W, _ = base_img.size
     draw = ImageDraw.Draw(base_img)
     bbox = draw.textbbox((0, 0), text, font=font)
@@ -518,12 +565,48 @@ def draw_video_title_with_stroke(base_img, y_pos, text, font, text_color=(255, 2
     x_pos = (W - tw) // 2
     draw.text((x_pos, y_pos), text, font=font, fill=text_color, stroke_width=stroke_w, stroke_fill=stroke_color)
 
+def get_video_title_lines(judul):
+    """Menyusun judul maksimal 2 baris; memperkecil ukuran font adaptif jika kalimat panjang"""
+    max_text_width = 900
+    font_size = 42
+    min_size = 28
+    words = judul.split()
+
+    while font_size >= min_size:
+        font = get_video_title_font(font_size)
+        lines = []
+        cur = []
+        for w in words:
+            test_line = " ".join(cur + [w])
+            bbox = font.getbbox(test_line)
+            w_px = bbox[2] - bbox[0]
+            if w_px <= max_text_width:
+                cur.append(w)
+            else:
+                if cur:
+                    lines.append(" ".join(cur))
+                    cur = [w]
+                else:
+                    lines.append(w)
+                    cur = []
+        if cur:
+            lines.append(" ".join(cur))
+
+        if len(lines) <= 2:
+            return lines, font, font_size
+
+        font_size -= 2
+
+    font = get_video_title_font(min_size)
+    mid = len(words) // 2
+    return [" ".join(words[:mid]), " ".join(words[mid:])], font, min_size
+
 def create_video_overlay(custom_source=None):
     W, H = 1080, 1920
     canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
 
     # 1. Logo Putih Atas Video: Logo_Atas_Video.png (W: 104px, H: 90px di X: 487, Y: 113)
-    logo_atas_file = find_asset_file(["Logo_Atas_Video.png"], ["atas video", "logo atas video", "logo top"])
+    logo_atas_file = find_asset_file(["Logo_Atas_Video.png", "logo_atas_video.png"], ["atas video", "logo atas video", "logo top"])
     if logo_atas_file:
         try:
             l_top = Image.open(logo_atas_file).convert("RGBA")
@@ -535,36 +618,32 @@ def create_video_overlay(custom_source=None):
         except Exception as e:
             print(f"Error load Logo_Atas_Video: {e}")
 
-    # 2. Font Judul: Classic2 CapCut ukuran 42, Stroke #a6a6a6 ketebalan visual slider 75 (=3px)
-    font_title = get_video_title_font(42)
+    # 2. Judul Video: Classic2 CapCut, Maksimal 2 Baris, Stroke #616264
     judul = state["selected_title"].strip()
-    words = judul.split()
-    lines, cur = [], []
-    for w in words:
-        cur.append(w)
-        if len(" ".join(cur)) > 26:
-            lines.append(" ".join(cur[:-1]))
-            cur = [w]
-    if cur:
-        lines.append(" ".join(cur))
+    lines, font_title, f_size = get_video_title_lines(judul)
+    y_title = 285 if len(lines) == 2 else 315
+    line_spacing = int(f_size * 1.35)
 
-    y_title = 285
-    for line in lines[:3]:
-        draw_video_title_with_stroke(canvas, y_title, line, font_title, text_color=(255, 255, 255, 255), stroke_color="#a6a6a6", stroke_w=3)
-        y_title += 62
+    for line in lines:
+        draw_video_title_with_stroke(
+            canvas, y_title, line, font_title,
+            text_color=(255, 255, 255, 255),
+            stroke_color="#616264",
+            stroke_w=3
+        )
+        y_title += line_spacing
 
-    # 3. Sumber Video: Font "system" CapCut ukuran 16
+    # 3. Sumber Video: font 'system' CapCut ukuran 16
     font_system = get_video_system_font(16)
     med = state["converter_data"]["sumber_media"]
     sumber_lbl = custom_source if custom_source else f"Foto: {med}"
-    
     draw = ImageDraw.Draw(canvas)
     bbox_s = draw.textbbox((0, 0), sumber_lbl, font=font_system)
     sw = bbox_s[2] - bbox_s[0]
     draw.text(((W - sw) // 2, 1765), sumber_lbl, font=font_system, fill=(240, 240, 240, 255))
 
-    # 4. Logo CampersMagz Bawah Video: Logo_cover_kiri_bawah.png (W: 235px, H: 42px di X: 421, Y: 1799)
-    logo_bawah_file = find_asset_file(["Logo_cover_kiri_bawah.png", "logo_cover_kiri_bawah.png"], ["kiri bawah", "bottom"])
+    # 4. Logo Bawah Video: Logo_bawah_video.png (W: 235px, H: 42px di X: 421, Y: 1799)
+    logo_bawah_file = find_asset_file(["Logo_bawah_video.png", "logo_bawah_video.png"], ["bawah video", "logo bawah video", "logo_bawah_video", "Logo_cover_kiri_bawah.png"])
     if logo_bawah_file:
         try:
             l_bot = Image.open(logo_bawah_file).convert("RGBA")
@@ -574,7 +653,7 @@ def create_video_overlay(custom_source=None):
             l_bot = l_bot.resize((235, 42), Image.Resampling.LANCZOS)
             canvas.alpha_composite(l_bot, (421, 1799))
         except Exception as e:
-            print(f"Error load logo bawah video: {e}")
+            print(f"Error load Logo_bawah_video: {e}")
 
     out_path = "overlay_frame.png"
     canvas.save(out_path)
