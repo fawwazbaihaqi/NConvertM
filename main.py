@@ -42,13 +42,28 @@ state = {
 }
 
 # ==========================================
-# 2. SISTEM FONT NUNITO OTOMATIS
+# 2. GENERATOR UNICODE BOLD & SISTEM FONT
 # ==========================================
-def ensure_nunito_fonts():
-    base_url = "https://github.com/google/fonts/raw/main/ofl/nunito/"
+def to_unicode_bold(text):
+    res = []
+    for char in text:
+        code = ord(char)
+        if 65 <= code <= 90:
+            res.append(chr(119808 + (code - 65)))
+        elif 97 <= code <= 122:
+            res.append(chr(119834 + (code - 97)))
+        elif 48 <= code <= 57:
+            res.append(chr(120782 + (code - 48)))
+        else:
+            res.append(char)
+    return "".join(res)
+
+def ensure_custom_fonts():
     fonts = {
-        "Nunito-Bold.ttf": base_url + "Nunito-Bold.ttf",
-        "Nunito-Regular.ttf": base_url + "Nunito-Regular.ttf"
+        "Nunito-Bold.ttf": "https://github.com/google/fonts/raw/main/ofl/nunito/Nunito-Bold.ttf",
+        "Nunito-Regular.ttf": "https://github.com/google/fonts/raw/main/ofl/nunito/Nunito-Regular.ttf",
+        "Roboto-Regular.ttf": "https://github.com/google/fonts/raw/main/ofl/roboto/static/Roboto-Regular.ttf",
+        "PlayfairDisplay-Bold.ttf": "https://github.com/google/fonts/raw/main/ofl/playfairdisplay/static/PlayfairDisplay-Bold.ttf"
     }
     headers = {"User-Agent": "Mozilla/5.0"}
     for f_name, url in fonts.items():
@@ -59,19 +74,39 @@ def ensure_nunito_fonts():
                     with open(f_name, "wb") as f:
                         f.write(r.content)
             except Exception as e:
-                print(f"Font skip {f_name}: {e}")
+                print(f"Unduh font skip {f_name}: {e}")
 
-ensure_nunito_fonts()
+ensure_custom_fonts()
 
 def get_nunito_font(size, bold=True):
     font_path = "Nunito-Bold.ttf" if bold else "Nunito-Regular.ttf"
     if os.path.exists(font_path):
         return ImageFont.truetype(font_path, int(size))
-    fb_bold = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    fb_reg = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    target = fb_bold if bold else fb_reg
-    if os.path.exists(target):
-        return ImageFont.truetype(target, int(size))
+    fallback = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    if os.path.exists(fallback):
+        return ImageFont.truetype(fallback, int(size))
+    return ImageFont.load_default()
+
+def get_video_title_font(size=42):
+    """Font Classic2 CapCut: prioritaskan file lokal Classic2.ttf, fallback ke PlayfairDisplay-Bold"""
+    candidates = ["Classic2.ttf", "Classic 2.ttf", "classic2.ttf", "PlayfairDisplay-Bold.ttf"]
+    for cand in candidates:
+        if os.path.exists(cand):
+            return ImageFont.truetype(cand, int(size))
+    fb_serif = "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf"
+    if os.path.exists(fb_serif):
+        return ImageFont.truetype(fb_serif, int(size))
+    return ImageFont.load_default()
+
+def get_video_system_font(size=16):
+    """Font 'system' CapCut: Roboto-Regular"""
+    candidates = ["System.ttf", "system.ttf", "Roboto-Regular.ttf"]
+    for cand in candidates:
+        if os.path.exists(cand):
+            return ImageFont.truetype(cand, int(size))
+    fb_sans = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    if os.path.exists(fb_sans):
+        return ImageFont.truetype(fb_sans, int(size))
     return ImageFont.load_default()
 
 def find_asset_file(exact_names, fallback_keywords):
@@ -87,7 +122,7 @@ def find_asset_file(exact_names, fallback_keywords):
     return None
 
 # ==========================================
-# 3. SCRAPER BERITA & NANO BANANA ART (REST API)
+# 3. SCRAPER BERITA & NANO BANANA ART
 # ==========================================
 def fetch_articles():
     q = "berita+pendakian+gunung&hl=id&gl=ID&ceid=ID:id"
@@ -132,17 +167,13 @@ def extract_article_image(article_entry):
             soup = BeautifulSoup(resp.text, "html.parser")
             img_url = None
             for prop in ["og:image", "twitter:image", "image"]:
-                tag = (
-                    soup.find("meta", property=prop)
-                    or soup.find("meta", attrs={"name": prop})
-                )
+                tag = soup.find("meta", property=prop) or soup.find("meta", attrs={"name": prop})
                 if tag and tag.get("content"):
                     if "googleusercontent" not in tag.get("content", ""):
                         img_url = tag["content"]
                         break
             if not img_url:
-                sels = [".photo img", ".read__content img", "article img", "figure img"]
-                for sel in sels:
+                for sel in [".photo img", ".read__content img", "article img", "figure img"]:
                     el = soup.select_one(sel)
                     if el and (el.get("src") or el.get("data-src")):
                         img_url = el.get("src") or el.get("data-src")
@@ -187,7 +218,6 @@ def generate_nano_banana_art(prompt_subject):
         img = Image.new("RGB", (1024, 1024), color="#FFFFFF")
         img.save(state["cover_source_img"])
         return False
-
     try:
         prompt = (
             f"2D editorial comic cartoon vector illustration of {prompt_subject}, "
@@ -195,13 +225,8 @@ def generate_nano_banana_art(prompt_subject):
             f"vibrant flat colors, subject centered and isolated on a solid pure "
             f"white background (#FFFFFF), blank white space at top, no text, no watermark."
         )
-        url = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"gemini-2.5-flash-image:generateContent?key={GEMINI_API_KEY}"
-        )
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}]
-        }
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key={GEMINI_API_KEY}"
+        payload = {"contents": [{"parts": [{"text": prompt}]}]}
         r = requests.post(url, json=payload, timeout=35)
         if r.status_code == 200:
             data = r.json()
@@ -221,10 +246,9 @@ def generate_nano_banana_art(prompt_subject):
     return False
 
 # ==========================================
-# 4. PARSER JSON PINTAR & 3-TIER AI ENGINE (MURNI REST HTTP)
+# 4. KONTEN DRAF BERITA (STANDAR CAMPERSMAGZ)
 # ==========================================
 def extract_clean_json(raw_text):
-    """Mengekstrak objek JSON valid meskipun ada tag <think> atau teks tambahan"""
     cleaned = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned).strip()
     match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
@@ -234,70 +258,53 @@ def extract_clean_json(raw_text):
 
 def generate_converter_content(article):
     system_prompt = (
-        "Kamu adalah aplikasi CampersMagz News Converter. "
-        "Langsung berikan output HANYA berupa JSON murni tanpa pengantar dan tanpa <think>:\n"
+        "Kamu adalah admin @campersmagz: pendaki berpengalaman yang hangat, semi-formal, setara, dan edukatif. "
+        "Ikuti formula baku penulisan 5 lapisan CampersMagz. "
+        "Hasilkan HANYA JSON murni tanpa markdown, tanpa pengantar, dan tanpa <think>:\n"
         "{\n"
-        '  "kata_kunci_utama": "Nama gunung maksimal 2-3 kata",\n'
+        '  "kata_kunci_utama": "Nama gunung/subjek maksimal 2-3 kata Title Case",\n'
         '  "opsi_judul": [\n'
-        '    "Judul 1 (7-10 kata, diakhiri !)",\n'
-        '    "Judul 2 (7-10 kata, diakhiri !)",\n'
-        '    "Judul 3 (7-10 kata, diakhiri !?)"\n'
+        '    "Judul 1 (Title Case, 8-12 kata, jujur, lugas, sedikit provokatif positif, diakhiri !)",\n'
+        '    "Judul 2 (Title Case, 8-12 kata, diakhiri !)",\n'
+        '    "Judul 3 (Title Case, 8-12 kata, diakhiri !?)"\n'
         "  ],\n"
-        '  "intro": "1-2 kalimat pembuka padat bagi pendaki",\n'
-        '  "isi": "Rangkuman berita padat (maksimal 2 paragraf pendek)",\n'
-        '  "kesimpulan": "Pengingat keselamatan singkat",\n'
-        '  "sumber_media": "Domain media singkat (contoh: kompas.com)",\n'
+        '  "teras_berita": "Paragraf 1: Teras Berita (1-2 kalimat padat inti kabar 5W1H tanpa basa-basi Halo Sobat)",\n'
+        '  "tubuh_berita": "Paragraf 2: Rincian fakta kronologi & dampak langsung bagi pendaki",\n'
+        '  "penutup_edukasi": "1 kalimat reflektif/pesan keselamatan berbobot yang menjadi punchline",\n'
+        '  "cta": "Tepat SATU kalimat Call To Action yang relevan (fokus Save/Share/Komen/Follow)",\n'
+        '  "sumber_media": "Nama media resmi sumber berita Title Case (contoh: Kompas.com / Detik.com)",\n'
         '  "art_prompt": "Deskripsi kartun 2D singkat bahasa Inggris",\n'
         '  "mood_musik": "Pilih satu: urgent, somber, upbeat, atau chill"\n'
         "}"
     )
-    summary_cut = re.sub(r"<[^>]+>", "", article.get("summary", ""))[:350]
+    summary_cut = re.sub(r"<[^>]+>", "", article.get("summary", ""))[:400]
     user_txt = f"Judul: {article.title}\nRingkasan: {summary_cut}"
     error_logs = []
 
-    # --- TINGKAT 1: GROQ REST API ---
     if GROQ_API_KEY:
         try:
             print("Mencoba Tingkat 1: Groq API...")
-            headers = {
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json"
-            }
+            headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
             payload = {
                 "model": "qwen/qwen3.8-27b",
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_txt + "\n/no_think"}
                 ],
-                "max_tokens": 850,
+                "max_tokens": 950,
                 "temperature": 0.4
             }
-            r = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers=headers, json=payload, timeout=20
-            )
+            r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=20)
             if r.status_code == 200:
-                content = r.json()["choices"][0]["message"]["content"]
-                return extract_clean_json(content)
-            else:
-                error_logs.append(f"Groq({r.status_code})")
+                return extract_clean_json(r.json()["choices"][0]["message"]["content"])
+            error_logs.append(f"Groq({r.status_code})")
         except Exception as e:
-            error_logs.append(f"GroqErr({str(e)[:40]})")
-    else:
-        error_logs.append("Groq(NoKey)")
+            error_logs.append(f"GroqErr({str(e)[:30]})")
 
-    # --- TINGKAT 2: GITHUB MODELS REST API ---
     if GH_TOKEN:
-        for gh_url in [
-            "https://models.github.ai/inference/chat/completions",
-            "https://models.inference.ai.azure.com/chat/completions"
-        ]:
+        for gh_url in ["https://models.github.ai/inference/chat/completions", "https://models.inference.ai.azure.com/chat/completions"]:
             try:
-                print(f"Mencoba Tingkat 2: GitHub Models ({gh_url})...")
-                headers = {
-                    "Authorization": f"Bearer {GH_TOKEN}",
-                    "Content-Type": "application/json"
-                }
+                headers = {"Authorization": f"Bearer {GH_TOKEN}", "Content-Type": "application/json"}
                 payload = {
                     "model": "gpt-4o-mini",
                     "messages": [
@@ -308,58 +315,39 @@ def generate_converter_content(article):
                 }
                 r = requests.post(gh_url, headers=headers, json=payload, timeout=15)
                 if r.status_code == 200:
-                    content = r.json()["choices"][0]["message"]["content"]
-                    return extract_clean_json(content)
-                else:
-                    error_logs.append(f"GH({r.status_code})")
+                    return extract_clean_json(r.json()["choices"][0]["message"]["content"])
+                error_logs.append(f"GH({r.status_code})")
             except Exception as e:
-                error_logs.append(f"GHErr({str(e)[:30]})")
+                error_logs.append(f"GHErr({str(e)[:25]})")
 
-    # --- TINGKAT 3: GEMINI REST API (TANPA SDK, ANTI GAGAL) ---
     if GEMINI_API_KEY:
         for gem_model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]:
             try:
-                print(f"Mencoba Tingkat 3: Gemini REST ({gem_model})...")
-                url = (
-                    "https://generativelanguage.googleapis.com/v1beta/models/"
-                    f"{gem_model}:generateContent?key={GEMINI_API_KEY}"
-                )
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{gem_model}:generateContent?key={GEMINI_API_KEY}"
                 payload = {
-                    "contents": [{
-                        "parts": [{"text": f"{system_prompt}\n\nBerita:\n{user_txt}"}]
-                    }],
-                    "generationConfig": {
-                        "temperature": 0.4,
-                        "responseMimeType": "application/json"
-                    }
+                    "contents": [{"parts": [{"text": f"{system_prompt}\n\nBerita:\n{user_txt}"}]}],
+                    "generationConfig": {"temperature": 0.4, "responseMimeType": "application/json"}
                 }
                 r = requests.post(url, json=payload, timeout=20)
                 if r.status_code == 200:
-                    data = r.json()
-                    txt = data["candidates"][0]["content"]["parts"][0]["text"]
+                    txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
                     return extract_clean_json(txt)
-                else:
-                    error_logs.append(f"{gem_model}({r.status_code})")
+                error_logs.append(f"{gem_model}({r.status_code})")
             except Exception as e:
-                error_logs.append(f"{gem_model}Err({str(e)[:30]})")
-    else:
-        error_logs.append("Gemini(NoKey)")
+                error_logs.append(f"{gem_model}Err({str(e)[:25]})")
 
-    detail_err = " | ".join(error_logs)
-    raise RuntimeError(f"Semua AI gagal. Detail: {detail_err}")
+    raise RuntimeError(f"Semua AI gagal: {' | '.join(error_logs)}")
 
 def build_full_article_text():
     d = state["converter_data"]
-    judul = state["selected_title"]
-    link = state["article"].link
-    return (
-        f"⛺ *{judul}*\n\n"
-        f"{d['intro']}\n\n"
-        f"{d['isi']}\n\n"
-        f"⚠️ *PENGINGAT PENDAKI:*\n{d['kesimpulan']}\n\n"
-        f"🔗 Sumber: {d['sumber_media']} ({link})\n\n"
-        f"#CampersMagz #InfoGunung #PendakiIndonesia #SafetyHiking"
-    )
+    judul_unicode_bold = to_unicode_bold(state["selected_title"].strip())
+    p1 = d.get("teras_berita", "").strip()
+    p2 = d.get("tubuh_berita", "").strip()
+    penutup = d.get("penutup_edukasi", "").strip()
+    cta = d.get("cta", "").strip()
+    p3 = f"{penutup} {cta}".strip()
+    sumber = f"Sumber: {d.get('sumber_media', 'Media').strip()}"
+    return f"{judul_unicode_bold}\n\n{p1}\n\n{p2}\n\n{p3}\n\n{sumber}"
 
 # ==========================================
 # 5. DESAIN COVER PERSIS KOORDINAT
@@ -378,8 +366,7 @@ def draw_tent_icon(draw, x, y, size=48, color=(130, 134, 138)):
 def draw_top_dark_logo_exact(canvas):
     tx, ty, tw, th = 485, 108, 110, 110
     dark_grey = (82, 86, 89, 255)
-    kws = ["top dark", "cover atas", "logo top dark", "logo atas"]
-    logo_file = find_asset_file(["logo_top_dark.png"], kws)
+    logo_file = find_asset_file(["logo_top_dark.png"], ["top dark", "cover atas", "logo atas"])
     if logo_file:
         try:
             l_img = Image.open(logo_file).convert("RGBA")
@@ -393,17 +380,15 @@ def draw_top_dark_logo_exact(canvas):
             canvas.alpha_composite(colored, (tx, ty))
             return
         except Exception as e:
-            print(f"Logo atas error: {e}")
+            print(f"Logo atas cover error: {e}")
 
     draw = ImageDraw.Draw(canvas)
     draw.ellipse([tx, ty, tx + tw, ty + th], fill=dark_grey)
     draw.ellipse([tx + 20, ty + 8, tx + tw - 6, ty + th - 18], fill=(255, 255, 255, 255))
 
-def draw_bottom_logo_exact(canvas):
+def draw_cover_bottom_logo(canvas):
     tx, ty, tw, th = 87, 1817, 194, 30
-    exact = ["Logo_cover_kiri_bawah.png", "logo_cover_kiri_bawah.png"]
-    kws = ["kiri bawah", "logo cover kiri bawah", "bottom"]
-    logo_file = find_asset_file(exact, kws)
+    logo_file = find_asset_file(["Logo_cover_kiri_bawah.png", "logo_cover_kiri_bawah.png"], ["kiri bawah", "bottom"])
     if logo_file:
         try:
             l_bot = Image.open(logo_file).convert("RGBA")
@@ -414,7 +399,7 @@ def draw_bottom_logo_exact(canvas):
             canvas.alpha_composite(l_bot, (tx, ty))
             return
         except Exception as e:
-            print(f"Logo bawah error: {e}")
+            print(f"Logo bawah cover error: {e}")
 
     draw = ImageDraw.Draw(canvas)
     f_b = get_nunito_font(28, bold=True)
@@ -510,81 +495,86 @@ def create_converter_cover():
             y_txt += 72
 
     draw.rounded_rectangle([60, 1805, 1020, 1862], radius=28, fill=footer_grey_hex)
-    draw_bottom_logo_exact(canvas)
+    draw_cover_bottom_logo(canvas)
 
+    # Sumber kanan bawah: Font Nunito ukuran 16 di X: 846 px, Y: 1819 px
     font_cr = get_nunito_font(16, bold=False)
     med = state["converter_data"]["sumber_media"].lower()
     sumber_kr = "foto: gemini" if state["is_ai_art"] else f"foto: {med}"
-    bbox_cr = draw.textbbox((0, 0), sumber_kr, font=font_cr)
-    cr_w = bbox_cr[2] - bbox_cr[0]
-    draw.text((980 - cr_w, 1822), sumber_kr, font=font_cr, fill=(255, 255, 255, 255))
+    draw.text((846, 1819), sumber_kr, font=font_cr, fill=(255, 255, 255, 255))
 
     out_img = canvas.convert("RGB")
     out_img.save(state["final_cover_img"])
     return state["final_cover_img"]
 
 # ==========================================
-# 6. OVERLAY VIDEO REELS (9:16)
+# 6. OVERLAY VIDEO REELS (FORMAT CAPCUT CLASSIC2)
 # ==========================================
-def draw_centered_video_text(base_img, y_pos, text, font, text_color=(255, 255, 255, 255)):
+def draw_video_title_with_stroke(base_img, y_pos, text, font, text_color=(255, 255, 255, 255), stroke_color="#a6a6a6", stroke_w=3):
     W, _ = base_img.size
     draw = ImageDraw.Draw(base_img)
     bbox = draw.textbbox((0, 0), text, font=font)
     tw = bbox[2] - bbox[0]
     x_pos = (W - tw) // 2
-
-    for ox, oy in [(-2, 0), (2, 0), (0, -2), (0, 2)]:
-        draw.text((x_pos + ox, y_pos + oy), text, font=font, fill=(0, 0, 0, 150))
-
-    if text.endswith("!!") or text.endswith("!?") or text.endswith("!"):
-        s_len = 2 if (text.endswith("!!") or text.endswith("!?")) else 1
-        main_p = text[:-s_len]
-        mark_p = text[-s_len:] + ("!" if s_len == 1 else "")
-        bbox_m = draw.textbbox((0, 0), main_p, font=font)
-        mw = bbox_m[2] - bbox_m[0]
-        draw.text((x_pos, y_pos), main_p, font=font, fill=text_color)
-        draw.text((x_pos + mw, y_pos), mark_p, font=font, fill=(235, 30, 30, 255))
-    else:
-        draw.text((x_pos, y_pos), text, font=font, fill=text_color)
+    draw.text((x_pos, y_pos), text, font=font, fill=text_color, stroke_width=stroke_w, stroke_fill=stroke_color)
 
 def create_video_overlay(custom_source=None):
     W, H = 1080, 1920
     canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    logo_file = find_asset_file(["logo_top.png", "logo.png"], ["top", "atas"])
-    if logo_file:
+
+    # 1. Logo Putih Atas Video: Logo_Atas_Video.png (W: 104px, H: 90px di X: 487, Y: 113)
+    logo_atas_file = find_asset_file(["Logo_Atas_Video.png"], ["atas video", "logo atas video", "logo top"])
+    if logo_atas_file:
         try:
-            l_top = Image.open(logo_file).convert("RGBA")
+            l_top = Image.open(logo_atas_file).convert("RGBA")
             bbox = l_top.getbbox()
             if bbox:
                 l_top = l_top.crop(bbox)
-            l_top.thumbnail((115, 115), Image.Resampling.LANCZOS)
-            canvas.alpha_composite(l_top, ((W - l_top.width) // 2, 120))
-        except:
-            pass
+            l_top = l_top.resize((104, 90), Image.Resampling.LANCZOS)
+            canvas.alpha_composite(l_top, (487, 113))
+        except Exception as e:
+            print(f"Error load Logo_Atas_Video: {e}")
 
-    font_title = get_nunito_font(50, bold=True)
+    # 2. Font Judul: Classic2 CapCut ukuran 42, Stroke #a6a6a6 ketebalan visual slider 75 (=3px)
+    font_title = get_video_title_font(42)
     judul = state["selected_title"].strip()
     words = judul.split()
     lines, cur = [], []
     for w in words:
         cur.append(w)
-        if len(" ".join(cur)) > 24:
+        if len(" ".join(cur)) > 26:
             lines.append(" ".join(cur[:-1]))
             cur = [w]
     if cur:
         lines.append(" ".join(cur))
 
-    y_title = 295
+    y_title = 285
     for line in lines[:3]:
-        draw_centered_video_text(canvas, y_title, line, font_title)
-        y_title += 72
+        draw_video_title_with_stroke(canvas, y_title, line, font_title, text_color=(255, 255, 255, 255), stroke_color="#a6a6a6", stroke_w=3)
+        y_title += 62
 
-    font_source = get_nunito_font(27, bold=True)
-    font_brand = get_nunito_font(42, bold=True)
+    # 3. Sumber Video: Font "system" CapCut ukuran 16
+    font_system = get_video_system_font(16)
     med = state["converter_data"]["sumber_media"]
     sumber_lbl = custom_source if custom_source else f"Foto: {med}"
-    draw_centered_video_text(canvas, 1730, sumber_lbl, font_source, (240, 240, 240, 255))
-    draw_centered_video_text(canvas, 1775, "CAMPERSMAGZ", font_brand, (255, 255, 255, 255))
+    
+    draw = ImageDraw.Draw(canvas)
+    bbox_s = draw.textbbox((0, 0), sumber_lbl, font=font_system)
+    sw = bbox_s[2] - bbox_s[0]
+    draw.text(((W - sw) // 2, 1765), sumber_lbl, font=font_system, fill=(240, 240, 240, 255))
+
+    # 4. Logo CampersMagz Bawah Video: Logo_cover_kiri_bawah.png (W: 235px, H: 42px di X: 421, Y: 1799)
+    logo_bawah_file = find_asset_file(["Logo_cover_kiri_bawah.png", "logo_cover_kiri_bawah.png"], ["kiri bawah", "bottom"])
+    if logo_bawah_file:
+        try:
+            l_bot = Image.open(logo_bawah_file).convert("RGBA")
+            bbox = l_bot.getbbox()
+            if bbox:
+                l_bot = l_bot.crop(bbox)
+            l_bot = l_bot.resize((235, 42), Image.Resampling.LANCZOS)
+            canvas.alpha_composite(l_bot, (421, 1799))
+        except Exception as e:
+            print(f"Error load logo bawah video: {e}")
 
     out_path = "overlay_frame.png"
     canvas.save(out_path)
@@ -635,24 +625,15 @@ def render_final_video(mode="pan_image", add_instrumental=True):
             "crop=1080:1920:(iw-ow)*t/5:(ih-oh)/2[bg];"
             "[bg][1:v]overlay=0:0[outv]"
         )
-        cmd = [
-            "ffmpeg", "-y", "-loop", "1", "-t", "5",
-            "-i", state["cover_source_img"], "-i", overlay_png
-        ]
+        cmd = ["ffmpeg", "-y", "-loop", "1", "-t", "5", "-i", state["cover_source_img"], "-i", overlay_png]
         if has_bgm:
             fc = vf + ";[2:a]afade=t=out:st=3.5:d=1.5[outa]"
             cmd += ["-i", bgm_p, "-filter_complex", fc, "-map", "[outv]", "-map", "[outa]"]
         else:
             cmd += ["-filter_complex", vf, "-map", "[outv]"]
-        cmd += [
-            "-t", "5", "-c:v", "libx264", "-preset", "ultrafast",
-            "-pix_fmt", "yuv420p", "-shortest", output_mp4
-        ]
+        cmd += ["-t", "5", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-shortest", output_mp4]
     else:
-        p_cmd = [
-            "ffprobe", "-v", "error", "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1", state["uploaded_video_path"]
-        ]
+        p_cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", state["uploaded_video_path"]]
         probe = subprocess.run(p_cmd, capture_output=True, text=True)
         try:
             dur = float(probe.stdout.strip())
@@ -660,17 +641,11 @@ def render_final_video(mode="pan_image", add_instrumental=True):
             dur = 8.0
         f_st = max(0.5, dur - 2.0)
 
-        pa_cmd = [
-            "ffprobe", "-v", "error", "-select_streams", "a",
-            "-show_entries", "stream=index", "-of", "csv=p=0", state["uploaded_video_path"]
-        ]
+        pa_cmd = ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", state["uploaded_video_path"]]
         probe_a = subprocess.run(pa_cmd, capture_output=True, text=True)
         vid_has_a = bool(probe_a.stdout.strip())
 
-        vf = (
-            "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
-            "crop=1080:1920[bg];[bg][1:v]overlay=0:0[outv]"
-        )
+        vf = "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[bg];[bg][1:v]overlay=0:0[outv]"
         cmd = ["ffmpeg", "-y", "-i", state["uploaded_video_path"], "-i", overlay_png]
         if has_bgm:
             bgm_act = prepare_mood_audio(mood=mood_b, duration=int(dur) + 3)
@@ -805,7 +780,7 @@ def send_caption_review():
         InlineKeyboardButton("✅ Pilih Caption Ini", callback_data="cap_keep"),
         InlineKeyboardButton("🔄 Generate Caption Lain", callback_data="cap_regen")
     )
-    bot.send_message(TELEGRAM_CHAT_ID, f"📝 *REVIEW CAPTION:*\n\n{cap}", parse_mode="Markdown", reply_markup=markup)
+    bot.send_message(TELEGRAM_CHAT_ID, f"📝 *REVIEW CAPTION (STANDAR CAMPERSMAGZ):*\n\n{cap}", reply_markup=markup)
 
 @bot.message_handler(content_types=["photo"])
 def handle_user_cover_photo(message):
@@ -846,15 +821,16 @@ def handle_user_video(message):
 
 def send_final_package(mp4_path):
     full_text = build_full_article_text()
-    judul = state["selected_title"]
+    judul_unicode = to_unicode_bold(state["selected_title"].strip())
     with open(state["final_cover_img"], "rb") as cov:
         bot.send_photo(TELEGRAM_CHAT_ID, cov, caption="✅ *COVER FINAL*", parse_mode="Markdown")
     med = state["converter_data"]["sumber_media"]
-    v_cap = f"⛺ *{judul}*\n🔗 Sumber: {med}\n#CampersMagz #InfoGunung"
+    v_cap = f"{judul_unicode}\n\nSumber: {med}"
     with open(mp4_path, "rb") as vid:
-        bot.send_video(TELEGRAM_CHAT_ID, vid, caption=v_cap, parse_mode="Markdown")
-    bot.send_message(TELEGRAM_CHAT_ID, f"📝 *CAPTION LENGKAP:*\n\n{full_text}", parse_mode="Markdown")
-    bot.send_message(TELEGRAM_CHAT_ID, "🎉 *Selesai!* Konten siap di-upload.", parse_mode="Markdown")
+        bot.send_video(TELEGRAM_CHAT_ID, vid, caption=v_cap)
+    
+    bot.send_message(TELEGRAM_CHAT_ID, f"📝 *CAPTION SIAP POSTING (TINGGAL SALIN):*\n\n{full_text}")
+    bot.send_message(TELEGRAM_CHAT_ID, "🎉 *Selesai!* Seluruh paket berita CampersMagz sudah siap diposting.")
     bot.stop_polling()
 
 if __name__ == "__main__":
