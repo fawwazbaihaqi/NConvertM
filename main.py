@@ -12,44 +12,19 @@ from PIL import Image, ImageDraw, ImageFont
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# 1. KONFIGURASI API & CLIENTS
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-GH_TOKEN = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+# ==========================================
+# 1. KONFIGURASI API & SECRETS
+# ==========================================
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
+GH_TOKEN = (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
 if not all([TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
-    raise ValueError("TELEGRAM_BOT_TOKEN & TELEGRAM_CHAT_ID wajib diisi!")
+    raise ValueError("TELEGRAM_BOT_TOKEN dan TELEGRAM_CHAT_ID wajib diisi!")
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
-
-groq_client = None
-if GROQ_API_KEY:
-    try:
-        from groq import Groq
-        groq_client = Groq(api_key=GROQ_API_KEY)
-    except Exception as e:
-        print(f"Groq init skip: {e}")
-
-gh_client = None
-if GH_TOKEN:
-    try:
-        from openai import OpenAI
-        gh_client = OpenAI(
-            base_url="https://models.inference.ai.azure.com",
-            api_key=GH_TOKEN
-        )
-    except Exception as e:
-        print(f"GitHub Models init skip: {e}")
-
-genai_client = None
-if GEMINI_API_KEY:
-    try:
-        from google import genai
-        genai_client = genai.Client(api_key=GEMINI_API_KEY)
-    except Exception as e:
-        print(f"Gemini init skip: {e}")
 
 state = {
     "articles": [],
@@ -66,7 +41,9 @@ state = {
     "is_ai_art": False
 }
 
+# ==========================================
 # 2. SISTEM FONT NUNITO OTOMATIS
+# ==========================================
 def ensure_nunito_fonts():
     base_url = "https://github.com/google/fonts/raw/main/ofl/nunito/"
     fonts = {
@@ -109,7 +86,9 @@ def find_asset_file(exact_names, fallback_keywords):
                     return f
     return None
 
-# 3. SCRAPER BERITA & NANO BANANA ART
+# ==========================================
+# 3. SCRAPER BERITA & NANO BANANA ART (REST API)
+# ==========================================
 def fetch_articles():
     q = "berita+pendakian+gunung&hl=id&gl=ID&ceid=ID:id"
     rss_url = f"https://news.google.com/rss/search?q={q}"
@@ -204,10 +183,11 @@ def extract_article_image(article_entry):
 
 def generate_nano_banana_art(prompt_subject):
     state["is_ai_art"] = True
-    if not genai_client:
+    if not GEMINI_API_KEY:
         img = Image.new("RGB", (1024, 1024), color="#FFFFFF")
         img.save(state["cover_source_img"])
         return False
+
     try:
         prompt = (
             f"2D editorial comic cartoon vector illustration of {prompt_subject}, "
@@ -215,27 +195,47 @@ def generate_nano_banana_art(prompt_subject):
             f"vibrant flat colors, subject centered and isolated on a solid pure "
             f"white background (#FFFFFF), blank white space at top, no text, no watermark."
         )
-        response = genai_client.models.generate_content(
-            model="gemini-2.5-flash-image",
-            contents=prompt
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"gemini-2.5-flash-image:generateContent?key={GEMINI_API_KEY}"
         )
-        for part in response.candidates[0].content.parts:
-            if part.inline_data:
-                img = Image.open(BytesIO(part.inline_data.data)).convert("RGB")
-                img.save(state["cover_source_img"])
-                return True
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}]
+        }
+        r = requests.post(url, json=payload, timeout=35)
+        if r.status_code == 200:
+            data = r.json()
+            parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+            for p in parts:
+                if "inlineData" in p:
+                    b64_str = p["inlineData"]["data"]
+                    img_bytes = base64.b64decode(b64_str)
+                    img = Image.open(BytesIO(img_bytes)).convert("RGB")
+                    img.save(state["cover_source_img"])
+                    return True
     except Exception as e:
-        print(f"Error Nano Banana: {e}")
+        print(f"Error Nano Banana REST: {e}")
 
     img = Image.new("RGB", (1024, 1024), color="#FFFFFF")
     img.save(state["cover_source_img"])
     return False
 
-# 4. KONTEN DRAF BERITA (3-TIER: GROQ -> GITHUB -> GEMINI)
+# ==========================================
+# 4. PARSER JSON PINTAR & 3-TIER AI ENGINE (MURNI REST HTTP)
+# ==========================================
+def extract_clean_json(raw_text):
+    """Mengekstrak objek JSON valid meskipun ada tag <think> atau teks tambahan"""
+    cleaned = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned).strip()
+    match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+    if match:
+        return json.loads(match.group(0))
+    return json.loads(cleaned)
+
 def generate_converter_content(article):
     system_prompt = (
         "Kamu adalah aplikasi CampersMagz News Converter. "
-        "Hasilkan JSON murni TANPA markdown backtick dengan format persis:\n"
+        "Langsung berikan output HANYA berupa JSON murni tanpa pengantar dan tanpa <think>:\n"
         "{\n"
         '  "kata_kunci_utama": "Nama gunung maksimal 2-3 kata",\n'
         '  "opsi_judul": [\n'
@@ -251,65 +251,102 @@ def generate_converter_content(article):
         '  "mood_musik": "Pilih satu: urgent, somber, upbeat, atau chill"\n'
         "}"
     )
-    summary_cut = article.get("summary", "")[:400]
+    summary_cut = re.sub(r"<[^>]+>", "", article.get("summary", ""))[:350]
     user_txt = f"Judul: {article.title}\nRingkasan: {summary_cut}"
+    error_logs = []
 
-    # 1. Groq (Qwen 3.8)
-    if groq_client:
+    # --- TINGKAT 1: GROQ REST API ---
+    if GROQ_API_KEY:
         try:
-            print("Langkah 1: Groq qwen/qwen3.8-27b...")
-            res = groq_client.chat.completions.create(
-                messages=[
+            print("Mencoba Tingkat 1: Groq API...")
+            headers = {
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "qwen/qwen3.8-27b",
+                "messages": [
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_txt}
+                    {"role": "user", "content": user_txt + "\n/no_think"}
                 ],
-                model="qwen/qwen3.8-27b",
-                max_tokens=600,
-                temperature=0.5
+                "max_tokens": 850,
+                "temperature": 0.4
+            }
+            r = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers, json=payload, timeout=20
             )
-            raw = res.choices[0].message.content.strip()
-            raw = re.sub(r"^```json\s*|\s*```$", "", raw).strip()
-            return json.loads(raw)
+            if r.status_code == 200:
+                content = r.json()["choices"][0]["message"]["content"]
+                return extract_clean_json(content)
+            else:
+                error_logs.append(f"Groq({r.status_code})")
         except Exception as e:
-            print(f"Groq gagal ({e}), lanjut ke GitHub Models...")
+            error_logs.append(f"GroqErr({str(e)[:40]})")
+    else:
+        error_logs.append("Groq(NoKey)")
 
-    # 2. GitHub Models (GPT-4o-mini)
-    if gh_client:
-        try:
-            print("Langkah 2: GitHub Models gpt-4o-mini...")
-            res = gh_client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_txt}
-                ],
-                model="gpt-4o-mini",
-                response_format={"type": "json_object"},
-                temperature=0.4,
-                timeout=12.0
-            )
-            raw = res.choices[0].message.content.strip()
-            raw = re.sub(r"^```json\s*|\s*```$", "", raw).strip()
-            return json.loads(raw)
-        except Exception as e:
-            print(f"GitHub Models gagal ({e}), lanjut ke Gemini...")
+    # --- TINGKAT 2: GITHUB MODELS REST API ---
+    if GH_TOKEN:
+        for gh_url in [
+            "https://models.github.ai/inference/chat/completions",
+            "https://models.inference.ai.azure.com/chat/completions"
+        ]:
+            try:
+                print(f"Mencoba Tingkat 2: GitHub Models ({gh_url})...")
+                headers = {
+                    "Authorization": f"Bearer {GH_TOKEN}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "model": "gpt-4o-mini",
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_txt}
+                    ],
+                    "temperature": 0.4
+                }
+                r = requests.post(gh_url, headers=headers, json=payload, timeout=15)
+                if r.status_code == 200:
+                    content = r.json()["choices"][0]["message"]["content"]
+                    return extract_clean_json(content)
+                else:
+                    error_logs.append(f"GH({r.status_code})")
+            except Exception as e:
+                error_logs.append(f"GHErr({str(e)[:30]})")
 
-    # 3. Gemini 2.5 Flash
-    if genai_client:
-        try:
-            print("Langkah 3: Gemini 2.5 Flash...")
-            full_prompt = f"{system_prompt}\n\nBerita:\n{user_txt}"
-            res = genai_client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=full_prompt,
-                config={"response_mime_type": "application/json"}
-            )
-            raw = res.text.strip()
-            raw = re.sub(r"^```json\s*|\s*```$", "", raw).strip()
-            return json.loads(raw)
-        except Exception as e:
-            print(f"Gemini gagal: {e}")
+    # --- TINGKAT 3: GEMINI REST API (TANPA SDK, ANTI GAGAL) ---
+    if GEMINI_API_KEY:
+        for gem_model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]:
+            try:
+                print(f"Mencoba Tingkat 3: Gemini REST ({gem_model})...")
+                url = (
+                    "https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"{gem_model}:generateContent?key={GEMINI_API_KEY}"
+                )
+                payload = {
+                    "contents": [{
+                        "parts": [{"text": f"{system_prompt}\n\nBerita:\n{user_txt}"}]
+                    }],
+                    "generationConfig": {
+                        "temperature": 0.4,
+                        "responseMimeType": "application/json"
+                    }
+                }
+                r = requests.post(url, json=payload, timeout=20)
+                if r.status_code == 200:
+                    data = r.json()
+                    txt = data["candidates"][0]["content"]["parts"][0]["text"]
+                    return extract_clean_json(txt)
+                else:
+                    error_logs.append(f"{gem_model}({r.status_code})")
+            except Exception as e:
+                error_logs.append(f"{gem_model}Err({str(e)[:30]})")
+    else:
+        error_logs.append("Gemini(NoKey)")
 
-    raise RuntimeError("Semua engine AI gagal memproses draf berita.")
+    detail_err = " | ".join(error_logs)
+    raise RuntimeError(f"Semua AI gagal. Detail: {detail_err}")
 
 def build_full_article_text():
     d = state["converter_data"]
@@ -324,7 +361,9 @@ def build_full_article_text():
         f"#CampersMagz #InfoGunung #PendakiIndonesia #SafetyHiking"
     )
 
+# ==========================================
 # 5. DESAIN COVER PERSIS KOORDINAT
+# ==========================================
 def draw_tent_icon(draw, x, y, size=48, color=(130, 134, 138)):
     w = size
     h = int(size * 0.85)
@@ -484,7 +523,9 @@ def create_converter_cover():
     out_img.save(state["final_cover_img"])
     return state["final_cover_img"]
 
+# ==========================================
 # 6. OVERLAY VIDEO REELS (9:16)
+# ==========================================
 def draw_centered_video_text(base_img, y_pos, text, font, text_color=(255, 255, 255, 255)):
     W, _ = base_img.size
     draw = ImageDraw.Draw(base_img)
@@ -549,7 +590,9 @@ def create_video_overlay(custom_source=None):
     canvas.save(out_path)
     return out_path
 
+# ==========================================
 # 7. MOOD SYNTHESIZER & FFMPEG RENDERER
+# ==========================================
 def prepare_mood_audio(mood="chill", duration=12):
     mood = str(mood).lower().strip()
     if mood not in ["urgent", "somber", "upbeat", "chill"]:
@@ -651,7 +694,9 @@ def render_final_video(mode="pan_image", add_instrumental=True):
         raise RuntimeError("FFmpeg gagal merender video.")
     return output_mp4
 
+# ==========================================
 # 8. HANDLER INTERAKTIF TELEGRAM
+# ==========================================
 def send_news_candidate():
     if state["current_idx"] >= len(state["articles"]):
         bot.send_message(TELEGRAM_CHAT_ID, "⚠️ Semua berita terbaru sudah ditampilkan.")
