@@ -4,6 +4,7 @@ import re
 import base64
 import urllib.parse
 import subprocess
+import zipfile
 from io import BytesIO
 import requests
 import feedparser
@@ -32,17 +33,20 @@ state = {
     "article": None,
     "converter_data": None,
     "selected_title": "",
+    "bold_phrase": "",
     "cover_source_img": "source_img.jpg",
     "final_cover_img": "final_cover.png",
     "waiting_for_cover_upload": False,
     "waiting_for_video_upload": False,
+    "waiting_for_custom_title": False,
+    "waiting_for_custom_bold": False,
     "uploaded_video_path": "user_video.mp4",
     "custom_source_text": "",
     "is_ai_art": False
 }
 
 # ==========================================
-# 2. HELPER UNICODE BOLD & SISTEM FONT NUNITO TERVERIFIKASI
+# 2. HELPER UNICODE BOLD & SISTEM FONT NUNITO
 # ==========================================
 def to_unicode_bold(text: str) -> str:
     bold_map = {
@@ -63,7 +67,6 @@ def clean_mountain_name(name):
     return cleaned.title() if cleaned else name
 
 def ensure_custom_fonts():
-    """Mengunduh font Nunito asli dari URL raw terverifikasi dan memastikan ukuran valid"""
     headers = {"User-Agent": "Mozilla/5.0"}
     font_urls = {
         "Nunito-Bold.ttf": [
@@ -89,7 +92,6 @@ def ensure_custom_fonts():
                     if r.status_code == 200 and len(r.content) > 10000:
                         with open(filename, "wb") as f:
                             f.write(r.content)
-                        print(f"Font terverifikasi: {filename} ({len(r.content)} bytes)")
                         break
                 except Exception as e:
                     print(f"Gagal unduh {filename} dari {u}: {e}")
@@ -100,8 +102,6 @@ def get_nunito_font(size, bold=True):
     target_file = "Nunito-Bold.ttf" if bold else "Nunito-Regular.ttf"
     if os.path.exists(target_file) and os.path.getsize(target_file) > 10000:
         return ImageFont.truetype(target_file, int(size))
-    
-    # Cek folder paket Linux fonts-nunito
     system_paths = [
         f"/usr/share/fonts/truetype/nunito/{target_file}",
         "/usr/share/fonts/truetype/nunito/Nunito-Bold.ttf" if bold else "/usr/share/fonts/truetype/nunito/Nunito-Regular.ttf"
@@ -109,7 +109,6 @@ def get_nunito_font(size, bold=True):
     for sp in system_paths:
         if os.path.exists(sp):
             return ImageFont.truetype(sp, int(size))
-
     fallback = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     if os.path.exists(fallback):
         return ImageFont.truetype(fallback, int(size))
@@ -148,7 +147,7 @@ def find_asset_file(exact_names, fallback_keywords):
     return None
 
 # ==========================================
-# 3. SCRAPER BERITA & NANO BANANA ART (DILENGKAPI DIAGNOSTIK ERROR)
+# 3. SCRAPER BERITA & NANO BANANA ART
 # ==========================================
 def fetch_articles():
     q = "berita+pendakian+gunung&hl=id&gl=ID&ceid=ID:id"
@@ -241,7 +240,6 @@ def extract_article_image(article_entry):
     return success
 
 def generate_nano_banana_art(prompt_subject):
-    """Memanggil Google AI Studio Imagen 3 / Gemini Multimodal dengan pesan status akurat"""
     state["is_ai_art"] = True
     if not GEMINI_API_KEY:
         return False, "GEMINI_API_KEY belum disetel di Secrets GitHub!"
@@ -254,8 +252,6 @@ def generate_nano_banana_art(prompt_subject):
     )
 
     errors = []
-
-    # 1. Google AI Studio Imagen 3
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key={GEMINI_API_KEY}"
         payload = {
@@ -270,11 +266,10 @@ def generate_nano_banana_art(prompt_subject):
                 img = Image.open(BytesIO(base64.b64decode(b64_data))).convert("RGB")
                 img.save(state["cover_source_img"])
                 return True, "Sukses via Imagen 3"
-        errors.append(f"Imagen3({r.status_code}: {r.text[:60]})")
+        errors.append(f"Imagen3({r.status_code})")
     except Exception as e:
         errors.append(f"Imagen3Err({str(e)[:30]})")
 
-    # 2. Gemini Multimodal generateContent
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key={GEMINI_API_KEY}"
         payload = {
@@ -292,7 +287,7 @@ def generate_nano_banana_art(prompt_subject):
                         img = Image.open(BytesIO(base64.b64decode(inline["data"]))).convert("RGB")
                         img.save(state["cover_source_img"])
                         return True, "Sukses via Gemini 2.5 Flash Image"
-        errors.append(f"GeminiImage({r.status_code}: {r.text[:60]})")
+        errors.append(f"GeminiImage({r.status_code})")
     except Exception as e:
         errors.append(f"GeminiImageErr({str(e)[:30]})")
 
@@ -335,7 +330,6 @@ def generate_converter_content(article):
     user_txt = f"Bahan Berita:\nJudul: {article.title}\nRingkasan: {summary_cut}"
     error_logs = []
 
-    # 1. Gemini REST API (Prioritas Utama)
     if GEMINI_API_KEY:
         for gem_model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]:
             try:
@@ -365,8 +359,7 @@ def generate_converter_content(article):
                 }
                 r = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=20)
                 if r.status_code == 200:
-                    txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-                    data = extract_clean_json(txt)
+                    data = extract_clean_json(r.json()["candidates"][0]["content"]["parts"][0]["text"])
                     data["opsi_judul"] = [data["judul"]] + [x for x in data.get("alternatif_judul", []) if x != data["judul"]]
                     data["sumber_media"] = data.get("sumber") or "Media"
                     return data
@@ -374,7 +367,6 @@ def generate_converter_content(article):
             except Exception as e:
                 error_logs.append(f"{gem_model}Err({str(e)[:25]})")
 
-    # 2. Cadangan Groq REST API
     if GROQ_API_KEY:
         try:
             headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
@@ -384,7 +376,7 @@ def generate_converter_content(article):
                 '  "judul": "Judul utama cover/caption maksimal 12 kata, title case, sopan, dan jujur.",\n'
                 '  "alternatif_judul": ["Opsi 1", "Opsi 2", "Opsi 3", "Opsi 4", "Opsi 5"],\n'
                 '  "kata_kunci_utama": "1-2 kata nama gunung murni TANPA kata Gunung/Gn",\n'
-                '  "frasa_tebal": "2-3 kata di dalam judul",\n'
+                '  "frasa_tebal": "2-3 kata di dalam judul yang paling penting",\n'
                 '  "teras": "Lead 1-2 kalimat langsung inti kabar 5W1H tanpa basa-basi",\n'
                 '  "tubuh_berita": "Rincian fakta sumber + dampak nyata bagi pendaki",\n'
                 '  "penutup": "Pesan keselamatan singkat diakhiri SATU CTA",\n'
@@ -411,7 +403,6 @@ def generate_converter_content(article):
         except Exception as e:
             error_logs.append(f"GroqErr({str(e)[:30]})")
 
-    # 3. Cadangan GitHub Models REST API
     if GH_TOKEN:
         for gh_url in ["https://models.github.ai/inference/chat/completions", "https://models.inference.ai.azure.com/chat/completions"]:
             try:
@@ -455,7 +446,7 @@ def build_full_article_text():
     )
 
 # ==========================================
-# 5. DESAIN COVER PERSIS KOORDINAT
+# 5. DESAIN COVER PERSIS KOORDINAT & SELEKTIF BOLD
 # ==========================================
 def draw_cover_tent_logo(canvas, last_char_right, last_char_top):
     tenda_file = find_asset_file(
@@ -529,13 +520,13 @@ def draw_cover_bottom_logo(canvas):
 def format_cover_headline(judul, max_w=900):
     words = judul.split()
     if not words:
-        return [], get_nunito_font(44, bold=True), 44
+        return [], 44
 
     for f_size in range(54, 33, -2):
-        font = get_nunito_font(f_size, bold=True)
+        font = get_nunito_font(f_size, bold=False)
         w_full = font.getbbox(" ".join(words))[2] - font.getbbox(" ".join(words))[0]
         if w_full <= max_w:
-            return [" ".join(words)], font, f_size
+            return [" ".join(words)], f_size
 
         best_split = None
         min_diff = float("inf")
@@ -551,11 +542,38 @@ def format_cover_headline(judul, max_w=900):
                     best_split = (l1, l2)
 
         if best_split:
-            return [best_split[0], best_split[1]], font, f_size
+            return [best_split[0], best_split[1]], f_size
 
-    font = get_nunito_font(32, bold=True)
     mid = (len(words) + 1) // 2
-    return [" ".join(words[:mid]), " ".join(words[mid:])], font, 32
+    return [" ".join(words[:mid]), " ".join(words[mid:])], 32
+
+def draw_cover_headline_selective_bold(draw, start_x, start_y, lines, f_size, bold_phrase, text_dark):
+    """Menggambar judul kata-demi-kata: kata yang masuk bold_phrase dicetak Bold, sisanya Regular"""
+    font_reg = get_nunito_font(f_size, bold=False)
+    font_bld = get_nunito_font(f_size, bold=True)
+    line_spacing = int(f_size * 1.32)
+
+    bold_tokens = set(re.findall(r'\w+', bold_phrase.lower())) if bold_phrase else set()
+
+    y_pos = start_y
+    for line in lines:
+        words = line.split()
+        cur_x = start_x
+        for w in words:
+            clean_token = re.sub(r'[^\w]', '', w).lower()
+            is_bold = bool(clean_token and clean_token in bold_tokens)
+            use_font = font_bld if is_bold else font_reg
+
+            draw.text((cur_x, y_pos), w, font=use_font, fill=text_dark)
+            w_box = use_font.getbbox(w)
+            w_width = w_box[2] - w_box[0]
+            space_box = use_font.getbbox(" ")
+            space_w = space_box[2] - space_box[0]
+            cur_x += w_width + space_w
+
+        y_pos += line_spacing
+
+    return y_pos
 
 def create_converter_cover():
     W, H = 1080, 1920
@@ -565,8 +583,10 @@ def create_converter_cover():
     pill_bg = (224, 224, 224, 255)
     footer_grey_hex = "#616264"
 
+    # 1. Logo Atas
     draw_top_dark_logo_exact(canvas)
 
+    # 2. Kata Kunci Gunung (Tanpa kata "Gunung", contoh: "Andong")
     raw_kw = state["converter_data"].get("kata_kunci_utama", "Info Gunung")
     kata_kunci = clean_mountain_name(raw_kw)
 
@@ -580,17 +600,17 @@ def create_converter_cover():
         kw_w = bbox_kw[2] - bbox_kw[0]
         kw_h = bbox_kw[3] - bbox_kw[1]
 
-        # 1. Gambar highlight abu-abu DI BELAKANG teks
+        # Highlight abu-abu DI BELAKANG teks
         pill_y1 = start_y + bbox_kw[1] + int(kw_h * 0.52)
         pill_y2 = start_y + bbox_kw[3] + 4
         pill_x1 = start_x - 8
         pill_x2 = start_x + bbox_kw[2] + 16
         draw.rounded_rectangle([pill_x1, pill_y1, pill_x2, pill_y2], radius=14, fill=pill_bg)
 
-        # 2. Gambar teks kata kunci di depan highlight
+        # Teks kata kunci
         draw.text((start_x, start_y), kata_kunci, font=font_big, fill=text_dark)
 
-        # 3. Logo tenda menempel langsung di kanan atas huruf terakhir
+        # Logo tenda menempel presisi di kanan atas huruf terakhir
         last_char = kata_kunci[-1]
         prefix = kata_kunci[:-1]
         prefix_len = font_big.getlength(prefix)
@@ -599,17 +619,14 @@ def create_converter_cover():
         last_char_top = start_y + char_box[1]
         draw_cover_tent_logo(canvas, last_char_right, last_char_top)
 
-        # 4. Judul berita maksimal 2 baris seimbang
+        # 3. Judul berita maksimal 2 baris dengan dukungan selektif bold
         judul = state["selected_title"].strip()
-        lines, font_sub, f_sub_size = format_cover_headline(judul, max_w=900)
-
+        lines, f_sub_size = format_cover_headline(judul, max_w=900)
         y_sub = start_y + bbox_kw[3] + 40
-        line_spacing = int(f_sub_size * 1.32)
-        for line in lines[:2]:
-            draw.text((90, y_sub), line, font=font_sub, fill=text_dark)
-            y_sub += line_spacing
+        bold_phrase = state.get("bold_phrase", "")
+        y_end_text = draw_cover_headline_selective_bold(draw, 90, y_sub, lines[:2], f_sub_size, bold_phrase, text_dark)
 
-        # 5. Gambar berita asli dalam rounded rectangle
+        # 4. Kotak Gambar Berita Asli
         if os.path.exists(state["cover_source_img"]):
             src_img = Image.open(state["cover_source_img"]).convert("RGBA")
             box_w, box_h = 870, 520
@@ -626,7 +643,7 @@ def create_converter_cover():
             mask = Image.new("L", (box_w, box_h), 0)
             m_draw = ImageDraw.Draw(mask)
             m_draw.rounded_rectangle([0, 0, box_w, box_h], radius=38, fill=255)
-            y_img = max(860, y_sub + 40)
+            y_img = max(860, y_end_text + 35)
             canvas.paste(src_img, (105, y_img), mask)
 
     else:
@@ -636,23 +653,16 @@ def create_converter_cover():
             canvas.paste(art_img, (0, 740))
 
         judul = state["selected_title"].strip()
-        lines, font_sub, f_sub_size = format_cover_headline(judul, max_w=900)
+        lines, f_sub_size = format_cover_headline(judul, max_w=900)
         y_txt = 540
-        line_spacing = int(f_sub_size * 1.32)
-        for idx_l, line in enumerate(lines[:2]):
-            bbox = font_sub.getbbox(line)
-            tw = bbox[2] - bbox[0]
-            tx = (W - tw) // 2
-            draw.text((tx, y_txt), line, font=font_sub, fill=text_dark)
-            if idx_l == 0:
-                draw_cover_tent_logo(canvas, tx + tw, y_txt + bbox[1])
-            y_txt += line_spacing
+        bold_phrase = state.get("bold_phrase", "")
+        draw_cover_headline_selective_bold(draw, 90, y_txt, lines[:2], f_sub_size, bold_phrase, text_dark)
 
-    # 6. Kapsul highlight abu-abu bawah & logo
+    # 5. Kapsul highlight abu-abu bawah & logo
     draw.rounded_rectangle([60, 1805, 1020, 1862], radius=28, fill=footer_grey_hex)
     draw_cover_bottom_logo(canvas)
 
-    # 7. Sumber berita kanan bawah
+    # 6. Sumber berita kanan bawah
     font_cr = get_nunito_font(16, bold=False)
     sumber_val = state["converter_data"].get("sumber") or state["converter_data"].get("sumber_media") or "media"
     sumber_kr = f"foto: {sumber_val.strip().lower()}"
@@ -773,12 +783,18 @@ def create_video_overlays(custom_source=None):
     return path_logos, path_title
 
 # ==========================================
-# 7. MOOD SYNTHESIZER & FFMPEG RENDERER
+# 7. AUDIO INSTRUMENTAL ATMOSFERIK CAMPERSMAGZ
 # ==========================================
 def prepare_mood_audio(mood="chill", duration=6):
+    """
+    Menyiapkan musik latar video 6 detik:
+    1. Menggunakan file MP3 lokal jika user menaruh bgm_{mood}.mp3 / bgm.mp3 di repo.
+    2. Jika tidak ada file MP3, menghasilkan Multi-Layer Harmonic Ambient Pad ala Reels CampersMagz.
+    """
     mood = str(mood).lower().strip()
     if mood not in ["urgent", "somber", "upbeat", "chill"]:
         mood = "chill"
+
     custom_f = f"bgm_{mood}.mp3"
     if os.path.exists(custom_f):
         return custom_f
@@ -786,19 +802,29 @@ def prepare_mood_audio(mood="chill", duration=6):
         return "bgm.mp3"
 
     out_aud = f"synth_{mood}.mp3"
+
+    # Harmonic layering & ambient soundscapes per mood berita
     if mood == "urgent":
-        expr = "0.25*sin(2*PI*110*t)+0.15*sin(2*PI*130.81*t)"
+        # Ketegangan/Kebakaran: Deep sub-drone (55Hz), tense pulse rhythm (heartbeat), lowpass filter
+        expr = "0.35*sin(2*PI*55*t)*(1+0.4*sin(2*PI*1.8*t))+0.2*sin(2*PI*82.41*t)+0.15*sin(2*PI*110*t)"
+        filter_chain = "lowpass=f=750,volume=1.4"
     elif mood == "somber":
-        expr = "0.25*sin(2*PI*98*t)+0.15*sin(2*PI*116.54*t)"
+        # Duka/Musibah/SAR: Melancholic D-minor pad yang lambat dan khidmat
+        expr = "0.3*sin(2*PI*73.42*t)+0.2*sin(2*PI*87.31*t)+0.2*sin(2*PI*110*t)"
+        filter_chain = "lowpass=f=650,volume=1.3"
     elif mood == "upbeat":
-        expr = "0.2*sin(2*PI*261.63*t)+0.15*sin(2*PI*329.63*t)"
+        # Jalur Dibuka/Kabar Baik: Warm uplifting major chord drone bernada terang
+        expr = "0.25*sin(2*PI*130.81*t)+0.2*sin(2*PI*164.81*t)+0.2*sin(2*PI*196.00*t)+0.1*sin(2*PI*261.63*t)"
+        filter_chain = "bandpass=f=1200:w=1200,volume=1.2"
     else:
-        expr = "0.2*sin(2*PI*174.61*t)+0.15*sin(2*PI*220*t)"
+        # Chill/Edukasi/Tips: Relaxing ambient mountain pad yang lembut dan menenangkan
+        expr = "0.25*sin(2*PI*110*t)+0.2*sin(2*PI*137.5*t)+0.18*sin(2*PI*165*t)+0.12*sin(2*PI*220*t)"
+        filter_chain = "lowpass=f=1100,volume=1.3"
 
     cmd = [
         "ffmpeg", "-y", "-f", "lavfi",
         "-i", f"aevalsrc={expr}:s=44100:d={duration}",
-        "-af", "lowpass=f=1000", out_aud
+        "-af", filter_chain, out_aud
     ]
     subprocess.run(cmd, check=True)
     return out_aud
@@ -903,6 +929,45 @@ def send_cover_preview(cover_path):
     with open(cover_path, "rb") as ph:
         bot.send_photo(TELEGRAM_CHAT_ID, ph, caption=cap_txt, parse_mode="Markdown", reply_markup=markup)
 
+def send_title_options():
+    markup = InlineKeyboardMarkup()
+    opsi = state["converter_data"]["opsi_judul"]
+    txt = "📌 *PILIH OPSI JUDUL VIDEO & COVER:*\n\n"
+    for i, j in enumerate(opsi):
+        txt += f"{i+1}. {j}\n"
+        markup.add(InlineKeyboardButton(f"Pilih Judul #{i+1}", callback_data=f"title_{i}"))
+
+    # Tombol Tambahan: Buat Judul Sendiri
+    markup.add(InlineKeyboardButton("✍️ Buat Judul Sendiri", callback_data="title_custom"))
+    bot.send_message(TELEGRAM_CHAT_ID, txt, parse_mode="Markdown", reply_markup=markup)
+
+def send_bold_options():
+    """Menampilkan pilihan kata yang ingin ditebalkan pada cover 2 baris"""
+    frasa_ai = state["converter_data"].get("frasa_tebal", "").strip()
+    markup = InlineKeyboardMarkup()
+
+    if frasa_ai:
+        markup.add(InlineKeyboardButton(f"✨ Rekomendasi AI ('{frasa_ai}')", callback_data="bold_ai"))
+    markup.add(InlineKeyboardButton("📝 Baris Ke-2 Ditebalkan", callback_data="bold_line2"))
+    markup.add(InlineKeyboardButton("⚪ Semua Reguler (Tidak Ada yang Tebal)", callback_data="bold_none"))
+    markup.add(InlineKeyboardButton("✍️ Tulis Kata yang Mau Ditebalkan", callback_data="bold_custom"))
+
+    txt = (
+        f"🎨 *PILIH GAYA PENEGASAN (BOLD) COVER:*\n\n"
+        f"Judul Terpilih:\n*{state['selected_title']}*\n\n"
+        f"Pilih kata yang ingin Anda tebalkan agar tampilan cover lebih kontras dan menarik:"
+    )
+    bot.send_message(TELEGRAM_CHAT_ID, txt, parse_mode="Markdown", reply_markup=markup)
+
+def send_caption_review():
+    cap = build_full_article_text()
+    markup = InlineKeyboardMarkup()
+    markup.row(
+        InlineKeyboardButton("✅ Pilih Caption Ini", callback_data="cap_keep"),
+        InlineKeyboardButton("🔄 Generate Caption Lain", callback_data="cap_regen")
+    )
+    bot.send_message(TELEGRAM_CHAT_ID, f"📝 *REVIEW CAPTION RESMI CAMPERSMAGZ:*\n\n{cap}", reply_markup=markup)
+
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     try:
@@ -917,6 +982,7 @@ def handle_callbacks(call):
             extract_article_image(state["article"])
             state["converter_data"] = generate_converter_content(state["article"])
             state["selected_title"] = state["converter_data"]["opsi_judul"][0]
+            state["bold_phrase"] = state["converter_data"].get("frasa_tebal", "")
             cover_path = create_converter_cover()
             send_cover_preview(cover_path)
         elif data == "cover_nano":
@@ -932,7 +998,7 @@ def handle_callbacks(call):
                 bot.send_message(
                     TELEGRAM_CHAT_ID,
                     f"⚠️ *Nano Banana tidak dapat membuat gambar:*\n`{msg_detail}`\n\n"
-                    "💡 *Solusi:* Silakan klik tombol *Upload Foto Cover Sendiri* di atas untuk memasang gambar secara langsung.",
+                    "💡 *Solusi:* Silakan klik tombol *Upload Foto Cover Sendiri* di atas untuk memasang foto secara langsung.",
                     parse_mode="Markdown"
                 )
         elif data == "cover_upload":
@@ -942,16 +1008,65 @@ def handle_callbacks(call):
         elif data == "cover_keep":
             bot.answer_callback_query(call.id, "Cover dikunci!")
             send_title_options()
+
+        # Opsi Pilihan Judul
         elif data.startswith("title_"):
-            idx = int(data.split("_")[1])
-            state["selected_title"] = state["converter_data"]["opsi_judul"][idx]
-            create_converter_cover()
-            bot.answer_callback_query(call.id, "Judul ditetapkan!")
+            if data == "title_custom":
+                state["waiting_for_custom_title"] = True
+                bot.answer_callback_query(call.id, "Tulis judul Anda...")
+                bot.send_message(
+                    TELEGRAM_CHAT_ID,
+                    "✏️ *Silakan kirimkan teks judul buatan Anda sendiri:*\n"
+                    "(Contoh: `Jalur Pendem Andong Resmi Dibuka Kembali Untuk Pendaki`)",
+                    parse_mode="Markdown"
+                )
+            else:
+                idx = int(data.split("_")[1])
+                state["selected_title"] = state["converter_data"]["opsi_judul"][idx]
+                bot.answer_callback_query(call.id, "Judul dipilih!")
+                send_bold_options()
+
+        # Opsi Bolding Cover
+        elif data == "bold_ai":
+            state["bold_phrase"] = state["converter_data"].get("frasa_tebal", "")
+            bot.answer_callback_query(call.id, "Bold AI diterapkan!")
+            new_cov = create_converter_cover()
+            with open(new_cov, "rb") as ph:
+                bot.send_photo(TELEGRAM_CHAT_ID, ph, caption="✅ *Tampilan Cover Terbaru (Bold Rekomendasi AI)*", parse_mode="Markdown")
             send_caption_review()
+
+        elif data == "bold_line2":
+            lines, _ = format_cover_headline(state["selected_title"], max_w=900)
+            state["bold_phrase"] = lines[1] if len(lines) > 1 else lines[0]
+            bot.answer_callback_query(call.id, "Baris 2 ditebalkan!")
+            new_cov = create_converter_cover()
+            with open(new_cov, "rb") as ph:
+                bot.send_photo(TELEGRAM_CHAT_ID, ph, caption="✅ *Tampilan Cover Terbaru (Baris ke-2 Tebal)*", parse_mode="Markdown")
+            send_caption_review()
+
+        elif data == "bold_none":
+            state["bold_phrase"] = ""
+            bot.answer_callback_query(call.id, "Semua reguler!")
+            new_cov = create_converter_cover()
+            with open(new_cov, "rb") as ph:
+                bot.send_photo(TELEGRAM_CHAT_ID, ph, caption="✅ *Tampilan Cover Terbaru (Semua Reguler Tanpa Bold)*", parse_mode="Markdown")
+            send_caption_review()
+
+        elif data == "bold_custom":
+            state["waiting_for_custom_bold"] = True
+            bot.answer_callback_query(call.id, "Ketik kata tebal...")
+            bot.send_message(
+                TELEGRAM_CHAT_ID,
+                "✍️ *Ketikkan kata/frasa dari judul yang ingin Anda buat tebal:*\n"
+                f"(Judul saat ini: `{state['selected_title']}`)",
+                parse_mode="Markdown"
+            )
+
         elif data == "cap_regen":
             bot.answer_callback_query(call.id, "Membuat caption lain...")
             state["converter_data"] = generate_converter_content(state["article"])
             send_caption_review()
+
         elif data == "cap_keep":
             bot.answer_callback_query(call.id, "Caption dikunci!")
             markup = InlineKeyboardMarkup()
@@ -960,42 +1075,52 @@ def handle_callbacks(call):
                 InlineKeyboardButton("📤 Upload Video (Auto 6s)", callback_data="vid_upload")
             )
             bot.send_message(TELEGRAM_CHAT_ID, "🎬 *PILIH OPSI PEMBUATAN VIDEO:*", parse_mode="Markdown", reply_markup=markup)
+
         elif data == "vid_no_upload":
             bot.answer_callback_query(call.id, "Merender video 6 detik...")
-            bot.send_message(TELEGRAM_CHAT_ID, "⚙️ Merender video Pan 6 detik + Fade In Judul + Audio Fade Out...")
+            mood = state["converter_data"].get("mood_musik", "chill").upper()
+            bot.send_message(TELEGRAM_CHAT_ID, f"⚙️ Merender video Pan 6 detik + Audio Atmosferik ({mood}) + Fade Out...")
             mp4 = render_final_video(mode="pan_image", add_instrumental=True)
             send_final_package(mp4)
+
         elif data == "vid_upload":
             state["waiting_for_video_upload"] = True
             bot.answer_callback_query(call.id, "Silakan upload video...")
             bot.send_message(TELEGRAM_CHAT_ID, "📤 *Silakan upload video Anda (otomatis di-crop 6 detik awal).* Tulis sumber di Caption.", parse_mode="Markdown")
+
         elif data in ["bgm_yes", "bgm_no"]:
             add_bgm = (data == "bgm_yes")
             bot.answer_callback_query(call.id, "Mengedit video...")
-            bot.send_message(TELEGRAM_CHAT_ID, "⚙️ Mengedit video 6 detik + Fade In Judul sesuai format Reels CampersMagz...")
+            mood = state["converter_data"].get("mood_musik", "chill").upper()
+            bot.send_message(TELEGRAM_CHAT_ID, f"⚙️ Mengedit video 6 detik + Musik ({mood}) + Fade In Judul sesuai format Reels CampersMagz...")
             mp4 = render_final_video(mode="user_video", add_instrumental=add_bgm)
             send_final_package(mp4)
+
     except Exception as e:
         print(f"Callback error: {e}")
         bot.send_message(TELEGRAM_CHAT_ID, f"⚠️ Terjadi kendala teknis: `{e}`", parse_mode="Markdown")
 
-def send_title_options():
-    markup = InlineKeyboardMarkup()
-    opsi = state["converter_data"]["opsi_judul"]
-    txt = "📌 *PILIH OPSI JUDUL VIDEO & COVER:*\n\n"
-    for i, j in enumerate(opsi):
-        txt += f"{i+1}. {j}\n"
-        markup.add(InlineKeyboardButton(f"Pilih Judul #{i+1}", callback_data=f"title_{i}"))
-    bot.send_message(TELEGRAM_CHAT_ID, txt, parse_mode="Markdown", reply_markup=markup)
+@bot.message_handler(content_types=["text"])
+def handle_user_text_inputs(message):
+    # 1. Menangani input judul buatan user
+    if state["waiting_for_custom_title"]:
+        user_title = message.text.strip()
+        state["selected_title"] = user_title
+        state["waiting_for_custom_title"] = False
+        bot.send_message(TELEGRAM_CHAT_ID, f"✅ *Judul ditetapkan:* `{user_title}`", parse_mode="Markdown")
+        send_bold_options()
+        return
 
-def send_caption_review():
-    cap = build_full_article_text()
-    markup = InlineKeyboardMarkup()
-    markup.row(
-        InlineKeyboardButton("✅ Pilih Caption Ini", callback_data="cap_keep"),
-        InlineKeyboardButton("🔄 Generate Caption Lain", callback_data="cap_regen")
-    )
-    bot.send_message(TELEGRAM_CHAT_ID, f"📝 *REVIEW CAPTION RESMI CAMPERSMAGZ:*\n\n{cap}", reply_markup=markup)
+    # 2. Menangani input kata tebal custom
+    if state["waiting_for_custom_bold"]:
+        user_bold = message.text.strip()
+        state["bold_phrase"] = user_bold
+        state["waiting_for_custom_bold"] = False
+        new_cov = create_converter_cover()
+        with open(new_cov, "rb") as ph:
+            bot.send_photo(TELEGRAM_CHAT_ID, ph, caption=f"✅ *Cover Diperbarui:* Kata `{user_bold}` berhasil ditebalkan!", parse_mode="Markdown")
+        send_caption_review()
+        return
 
 @bot.message_handler(content_types=["photo"])
 def handle_user_cover_photo(message):
