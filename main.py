@@ -43,7 +43,7 @@ state = {
 }
 
 # ==========================================
-# 2. GENERATOR UNICODE BOLD & SISTEM FONT NUNITO ASLI
+# 2. GENERATOR UNICODE BOLD & SISTEM FONT NUNITO
 # ==========================================
 def to_unicode_bold(text):
     res = []
@@ -59,14 +59,20 @@ def to_unicode_bold(text):
             res.append(char)
     return "".join(res)
 
-def ensure_custom_fonts():
-    """Mengunduh paket resmi Nunito langsung dari Google Fonts via ZIP dan mengekstrak TTF asli"""
-    headers = {"User-Agent": "Mozilla/5.0"}
+def clean_mountain_name(name):
+    """Menghilangkan kata 'Gunung', 'Gn.', 'Bukit' agar murni nama gunungnya saja (contoh: Andong)"""
+    if not name:
+        return "Info Gunung"
+    cleaned = re.sub(r"^(?:gunung|gn\.|g\.|bukit)\s+", "", name, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"\b(?:gunung|gn\.|g\.)\s+", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"\s*-\s*", "-", cleaned)
+    return cleaned.title() if cleaned else name
 
-    # 1. Unduh Nunito asli (Bold & Regular)
+def ensure_custom_fonts():
+    headers = {"User-Agent": "Mozilla/5.0"}
     if not (os.path.exists("Nunito-Bold.ttf") and os.path.exists("Nunito-Regular.ttf")):
         try:
-            print("Mengunduh paket font resmi Nunito dari Google Fonts...")
+            print("Mengunduh font resmi Nunito dari Google Fonts...")
             r = requests.get("https://fonts.google.com/download?family=Nunito", headers=headers, timeout=20)
             if r.status_code == 200:
                 with zipfile.ZipFile(BytesIO(r.content)) as z:
@@ -77,11 +83,9 @@ def ensure_custom_fonts():
                         elif filename.endswith("Nunito-Regular.ttf"):
                             with open("Nunito-Regular.ttf", "wb") as f:
                                 f.write(z.read(filename))
-                print("Font Nunito asli berhasil diekstrak dan siap digunakan!")
         except Exception as e:
             print(f"Gagal unduh Nunito ZIP: {e}")
 
-    # Fallback CDN jika download ZIP terhambat
     cdn_fallbacks = {
         "Nunito-Bold.ttf": "https://cdn.jsdelivr.net/gh/googlefonts/nunito@main/fonts/ttf/Nunito-Bold.ttf",
         "Nunito-Regular.ttf": "https://cdn.jsdelivr.net/gh/googlefonts/nunito@main/fonts/ttf/Nunito-Regular.ttf",
@@ -96,7 +100,7 @@ def ensure_custom_fonts():
                     with open(f_name, "wb") as f:
                         f.write(r.content)
             except Exception as e:
-                print(f"Fallback unduh {f_name} skip: {e}")
+                print(f"Fallback {f_name} skip: {e}")
 
 ensure_custom_fonts()
 
@@ -236,9 +240,7 @@ def extract_article_image(article_entry):
 def generate_nano_banana_art(prompt_subject):
     state["is_ai_art"] = True
     if not GEMINI_API_KEY:
-        err_msg = "GEMINI_API_KEY belum disetel di Secrets GitHub!"
-        print(err_msg)
-        bot.send_message(TELEGRAM_CHAT_ID, f"⚠️ *Nano Banana Gagal:* {err_msg}", parse_mode="Markdown")
+        print("GEMINI_API_KEY kosong untuk Nano Banana.")
         return False
 
     prompt = (
@@ -249,90 +251,40 @@ def generate_nano_banana_art(prompt_subject):
     )
 
     errors = []
-
-    # 1. Jalur OpenAI-Compatible resmi Google AI Studio
     try:
-        print("Mencoba Nano Banana via Google AI Studio Image API...")
         url = "https://generativelanguage.googleapis.com/v1beta/openai/images/generations"
-        headers = {
-            "Authorization": f"Bearer {GEMINI_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": "gemini-2.5-flash-image",
-            "prompt": prompt,
-            "response_format": "b64_json",
-            "n": 1
-        }
+        headers = {"Authorization": f"Bearer {GEMINI_API_KEY}", "Content-Type": "application/json"}
+        payload = {"model": "gemini-2.5-flash-image", "prompt": prompt, "response_format": "b64_json", "n": 1}
         r = requests.post(url, headers=headers, json=payload, timeout=35)
         if r.status_code == 200:
-            res_json = r.json()
-            b64_data = res_json["data"][0]["b64_json"]
+            b64_data = r.json()["data"][0]["b64_json"]
             img = Image.open(BytesIO(base64.b64decode(b64_data))).convert("RGB")
             img.save(state["cover_source_img"])
-            print("SUKSES menghasilkan gambar via Gemini Image API!")
             return True
-        else:
-            errors.append(f"AIStudio-OpenAI({r.status_code}: {r.text[:80]})")
+        errors.append(f"AIStudio-OpenAI({r.status_code})")
     except Exception as e:
-        errors.append(f"AIStudio-OpenAIErr({str(e)[:40]})")
+        errors.append(f"AIStudioErr({str(e)[:30]})")
 
-    # 2. Jalur Native generateContent gemini-2.5-flash-image
     try:
-        print("Mencoba Nano Banana via Native generateContent...")
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key={GEMINI_API_KEY}"
-        headers = {"Content-Type": "application/json"}
         payload = {
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [{"text": prompt}]
-                }
-            ],
-            "generationConfig": {
-                "responseModalities": ["TEXT", "IMAGE"]
-            }
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]}
         }
-        r = requests.post(url, headers=headers, json=payload, timeout=35)
+        r = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=35)
         if r.status_code == 200:
-            data = r.json()
-            candidates = data.get("candidates", [])
-            if candidates:
-                parts = candidates[0].get("content", {}).get("parts", [])
-                for p in parts:
-                    inline = p.get("inlineData") or p.get("inline_data")
-                    if inline and "data" in inline:
-                        b64_str = inline["data"]
-                        img = Image.open(BytesIO(base64.b64decode(b64_str))).convert("RGB")
-                        img.save(state["cover_source_img"])
-                        print("SUKSES menghasilkan gambar via Native generateContent!")
-                        return True
-        errors.append(f"NativeGemini({r.status_code}: {r.text[:80]})")
+            parts = r.json().get("candidates", [{}])[0].get("content", {}).get("parts", [])
+            for p in parts:
+                inline = p.get("inlineData") or p.get("inline_data")
+                if inline and "data" in inline:
+                    img = Image.open(BytesIO(base64.b64decode(inline["data"]))).convert("RGB")
+                    img.save(state["cover_source_img"])
+                    return True
+        errors.append(f"NativeGemini({r.status_code})")
     except Exception as e:
-        errors.append(f"NativeGeminiErr({str(e)[:40]})")
+        errors.append(f"NativeGeminiErr({str(e)[:30]})")
 
-    # 3. Jalur Imagen 3 (imagen-3.0-generate-002)
-    try:
-        print("Mencoba Google Imagen 3 API...")
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key={GEMINI_API_KEY}"
-        payload = {
-            "instances": [{"prompt": prompt}],
-            "parameters": {"sampleCount": 1, "aspectRatio": "1:1", "outputMimeType": "image/jpeg"}
-        }
-        r = requests.post(url, json=payload, timeout=35)
-        if r.status_code == 200:
-            b64_str = r.json()["predictions"][0]["bytesBase64Encoded"]
-            img = Image.open(BytesIO(base64.b64decode(b64_str))).convert("RGB")
-            img.save(state["cover_source_img"])
-            print("SUKSES menghasilkan gambar via Google Imagen 3!")
-            return True
-        errors.append(f"Imagen3({r.status_code}: {r.text[:80]})")
-    except Exception as e:
-        errors.append(f"Imagen3Err({str(e)[:40]})")
-
-    err_detail = " | ".join(errors)
-    print(f"Gagal generate Nano Banana: {err_detail}")
-    bot.send_message(TELEGRAM_CHAT_ID, f"⚠️ *Nano Banana Gagal:*\n`{err_detail}`", parse_mode="Markdown")
+    print(f"Nano Banana gagal: {' | '.join(errors)}")
     return False
 
 # ==========================================
@@ -352,9 +304,9 @@ def generate_converter_content(article):
         "Ikuti formula baku penulisan 5 lapisan CampersMagz. "
         "Hasilkan HANYA JSON murni tanpa markdown, tanpa pengantar, dan tanpa <think>:\n"
         "{\n"
-        '  "kata_kunci_utama": "Nama gunung/subjek maksimal 2-3 kata Title Case",\n'
+        '  "kata_kunci_utama": "HANYA nama gunung/subjek TANPA kata Gunung/Gn (contoh: Andong / Arjuno-Welirang / Semeru / Slamet)",\n'
         '  "opsi_judul": [\n'
-        '    "Judul 1 (Title Case, 8-12 kata, jujur, lugas, sedikit provokatif positif, diakhiri !)",\n'
+        '    "Judul 1 (Title Case, 8-12 kata, padat, menyambung wajar, diakhiri !)",\n'
         '    "Judul 2 (Title Case, 8-12 kata, diakhiri !)",\n'
         '    "Judul 3 (Title Case, 8-12 kata, diakhiri !?)"\n'
         "  ],\n"
@@ -441,30 +393,35 @@ def build_full_article_text():
 # ==========================================
 # 5. DESAIN COVER PERSIS KOORDINAT
 # ==========================================
-def draw_cover_tent_logo(canvas, right_x, top_y):
-    """Menempelkan Logo_tenda_cover.png langsung ke kanan atas huruf terakhir tanpa celah"""
-    tenda_file = find_asset_file(["Logo_tenda_cover.png", "logo_tenda_cover.png"], ["tenda cover", "logo tenda"])
+def draw_cover_tent_logo(canvas, last_char_right, last_char_top):
+    """Menempelkan sudut kiri bawah logo tenda tepat di sudut kanan atas huruf terakhir"""
+    tenda_file = find_asset_file(
+        ["Logo_tenda_cover.png", "logo_tenda_cover.png", "logo_tenda.png", "tenda.png", "tenda_cover.png"],
+        ["tenda", "tent"]
+    )
     if tenda_file:
         try:
             t_img = Image.open(tenda_file).convert("RGBA")
             t_bbox = t_img.getbbox()
             if t_bbox:
                 t_img = t_img.crop(t_bbox)
-            
             tw, th = t_img.size
-            tx = right_x - 1
-            ty = top_y - th + 2
+
+            # Sudut kiri bawah logo menempel tepat di sudut kanan atas huruf
+            tx = int(last_char_right - 2)
+            ty = int(last_char_top - th + 4)
             tx = max(0, min(tx, 1080 - tw - 10))
-            canvas.alpha_composite(t_img, (int(tx), int(ty)))
+            canvas.alpha_composite(t_img, (tx, ty))
             return
         except Exception as e:
             print(f"Error load Logo_tenda_cover: {e}")
 
+    # Fallback gambar tenda jika aset PNG belum di-upload
     draw = ImageDraw.Draw(canvas)
-    w = 48
+    w = 46
     h = int(w * 0.85)
-    tx = min(right_x - 1, 1080 - w - 10)
-    ty = top_y - h + 2
+    tx = int(last_char_right - 2)
+    ty = int(last_char_top - h + 4)
     draw.polygon([(tx + w // 2, ty), (tx, ty + h), (tx + w, ty + h)], outline=(130, 134, 138), width=2)
 
 def draw_top_dark_logo_exact(canvas):
@@ -509,6 +466,38 @@ def draw_cover_bottom_logo(canvas):
     f_b = get_nunito_font(28, bold=True)
     draw.text((tx, ty - 2), "CAMPERSMAGZ", font=f_b, fill=(255, 255, 255, 255))
 
+def format_cover_headline(judul, max_w=900):
+    """Membagi judul maksimal 2 baris, seimbang penuh kiri-kanan, dan ukuran font optimal"""
+    words = judul.split()
+    if not words:
+        return [], get_nunito_font(44, bold=True), 44
+
+    for f_size in range(54, 33, -2):
+        font = get_nunito_font(f_size, bold=True)
+        w_full = font.getbbox(" ".join(words))[2] - font.getbbox(" ".join(words))[0]
+        if w_full <= max_w:
+            return [" ".join(words)], font, f_size
+
+        best_split = None
+        min_diff = float("inf")
+        for i in range(1, len(words)):
+            l1 = " ".join(words[:i])
+            l2 = " ".join(words[i:])
+            w1 = font.getbbox(l1)[2] - font.getbbox(l1)[0]
+            w2 = font.getbbox(l2)[2] - font.getbbox(l2)[0]
+            if w1 <= max_w and w2 <= max_w:
+                diff = abs(w1 - w2)
+                if diff < min_diff:
+                    min_diff = diff
+                    best_split = (l1, l2)
+
+        if best_split:
+            return [best_split[0], best_split[1]], font, f_size
+
+    font = get_nunito_font(32, bold=True)
+    mid = (len(words) + 1) // 2
+    return [" ".join(words[:mid]), " ".join(words[mid:])], font, 32
+
 def create_converter_cover():
     W, H = 1080, 1920
     canvas = Image.new("RGBA", (W, H), (255, 255, 255, 255))
@@ -517,42 +506,55 @@ def create_converter_cover():
     pill_bg = (224, 224, 224, 255)
     footer_grey_hex = "#616264"
 
+    # 1. Logo Atas
     draw_top_dark_logo_exact(canvas)
-    judul = state["selected_title"].strip()
-    kata_kunci = state["converter_data"].get("kata_kunci_utama", "Info Gunung").strip()
+
+    # 2. Kata Kunci Gunung (Tanpa kata "Gunung", contoh: "Andong" / "Arjuno-Welirang")
+    raw_kw = state["converter_data"].get("kata_kunci_utama", "Info Gunung")
+    kata_kunci = clean_mountain_name(raw_kw)
 
     if not state["is_ai_art"]:
         kw_len = len(kata_kunci)
-        kw_size = 96 if kw_len <= 8 else (78 if kw_len <= 13 else 64)
+        kw_size = 96 if kw_len <= 7 else (82 if kw_len <= 12 else 68)
         font_big = get_nunito_font(kw_size, bold=True)
-        font_sub = get_nunito_font(44, bold=False)
 
-        draw.text((90, 460), kata_kunci, font=font_big, fill=text_dark)
-        bbox_kw = draw.textbbox((90, 460), kata_kunci, font=font_big)
+        start_x, start_y = 90, 440
+        bbox_kw = font_big.getbbox(kata_kunci)
         kw_w = bbox_kw[2] - bbox_kw[0]
         kw_h = bbox_kw[3] - bbox_kw[1]
 
-        pill_y1 = 460 + kw_h - 18
-        draw.rounded_rectangle([85, pill_y1, 85 + kw_w + 20, pill_y1 + 34], radius=16, fill=pill_bg)
-        
-        # Logo tenda menempel presisi di kanan atas huruf terakhir
-        draw_cover_tent_logo(canvas, bbox_kw[2], bbox_kw[1])
+        # GAMBAR HIGHLIGHT DI BELAKANG TERLEBIH DAHULU (PAINTER'S ALGORITHM)
+        pill_y1 = start_y + bbox_kw[1] + int(kw_h * 0.52)
+        pill_y2 = start_y + bbox_kw[3] + 4
+        pill_x1 = start_x - 8
+        pill_x2 = start_x + bbox_kw[2] + 16
+        draw.rounded_rectangle([pill_x1, pill_y1, pill_x2, pill_y2], radius=14, fill=pill_bg)
 
-        words = judul.split()
-        lines, cur = [], []
-        for w in words:
-            cur.append(w)
-            if len(" ".join(cur)) > 34:
-                lines.append(" ".join(cur[:-1]))
-                cur = [w]
-        if cur:
-            lines.append(" ".join(cur))
+        # GAMBAR TEKS JUDUL KATA KUNCI DI DEPAN HIGHLIGHT
+        draw.text((start_x, start_y), kata_kunci, font=font_big, fill=text_dark)
 
-        y_sub = 460 + kw_h + 55
-        for line in lines[:3]:
+        # HITUNG POSISI PRESISI HURUF TERAKHIR AGAR TENDA MENEMPEL
+        last_char = kata_kunci[-1]
+        prefix = kata_kunci[:-1]
+        prefix_len = font_big.getlength(prefix)
+        char_box = font_big.getbbox(last_char)
+        last_char_right = start_x + prefix_len + char_box[2]
+        last_char_top = start_y + char_box[1]
+
+        # GAMBAR LOGO TENDA MENEMPEL DI KANAN ATAS HURUF TERAKHIR
+        draw_cover_tent_logo(canvas, last_char_right, last_char_top)
+
+        # 3. Judul Berita (Maksimal 2 baris, terisi penuh seimbang)
+        judul = state["selected_title"].strip()
+        lines, font_sub, f_sub_size = format_cover_headline(judul, max_w=900)
+
+        y_sub = start_y + bbox_kw[3] + 40
+        line_spacing = int(f_sub_size * 1.32)
+        for line in lines[:2]:
             draw.text((90, y_sub), line, font=font_sub, fill=text_dark)
-            y_sub += 62
+            y_sub += line_spacing
 
+        # 4. Kotak Gambar Berita Asli (Rounded Rectangle)
         if os.path.exists(state["cover_source_img"]):
             src_img = Image.open(state["cover_source_img"]).convert("RGBA")
             box_w, box_h = 870, 520
@@ -569,42 +571,34 @@ def create_converter_cover():
             mask = Image.new("L", (box_w, box_h), 0)
             m_draw = ImageDraw.Draw(mask)
             m_draw.rounded_rectangle([0, 0, box_w, box_h], radius=38, fill=255)
-            canvas.paste(src_img, (105, 870), mask)
+            y_img = max(860, y_sub + 40)
+            canvas.paste(src_img, (105, y_img), mask)
+
     else:
+        # Layout Kartun Nano Banana
         if os.path.exists(state["cover_source_img"]):
             art_img = Image.open(state["cover_source_img"]).convert("RGBA")
             art_img = art_img.resize((1080, 1080), Image.Resampling.LANCZOS)
             canvas.paste(art_img, (0, 740))
 
-        font_reg = get_nunito_font(50, bold=False)
-        font_bld = get_nunito_font(50, bold=True)
-        words = judul.split()
-        lines, cur = [], []
-        for w in words:
-            cur.append(w)
-            if len(" ".join(cur)) > 26:
-                lines.append(" ".join(cur[:-1]))
-                cur = [w]
-        if cur:
-            lines.append(" ".join(cur))
-
+        judul = state["selected_title"].strip()
+        lines, font_sub, f_sub_size = format_cover_headline(judul, max_w=900)
         y_txt = 540
-        for idx_l, line in enumerate(lines[:3]):
-            use_f = font_bld if idx_l == len(lines[:3]) - 1 else font_reg
-            bbox = draw.textbbox((0, 0), line, font=use_f)
+        line_spacing = int(f_sub_size * 1.32)
+        for idx_l, line in enumerate(lines[:2]):
+            bbox = font_sub.getbbox(line)
             tw = bbox[2] - bbox[0]
             tx = (W - tw) // 2
-            draw.text((tx, y_txt), line, font=use_f, fill=text_dark)
+            draw.text((tx, y_txt), line, font=font_sub, fill=text_dark)
             if idx_l == 0:
-                l_bbox = draw.textbbox((tx, y_txt), line, font=use_f)
-                draw_cover_tent_logo(canvas, l_bbox[2], l_bbox[1])
-            y_txt += 72
+                draw_cover_tent_logo(canvas, tx + tw, y_txt + bbox[1])
+            y_txt += line_spacing
 
-    # Kapsul abu-abu bawah (X: 60..1020, Y: 1805..1862)
+    # 5. Kapsul Abu-Abu Bawah & Logo Bawah
     draw.rounded_rectangle([60, 1805, 1020, 1862], radius=28, fill=footer_grey_hex)
     draw_cover_bottom_logo(canvas)
 
-    # Sumber berita kanan bawah: font Nunito asli di dalam kapsul abu-abu
+    # 6. Sumber Berita Kanan Bawah
     font_cr = get_nunito_font(16, bold=False)
     med = state["converter_data"]["sumber_media"].lower()
     sumber_kr = "foto: gemini" if state["is_ai_art"] else f"foto: {med}"
