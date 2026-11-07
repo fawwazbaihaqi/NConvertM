@@ -43,21 +43,18 @@ state = {
 }
 
 # ==========================================
-# 2. GENERATOR UNICODE BOLD & SISTEM FONT NUNITO
+# 2. HELPER UNICODE BOLD & SISTEM FONT
 # ==========================================
-def to_unicode_bold(text):
-    res = []
-    for char in text:
-        code = ord(char)
-        if 65 <= code <= 90:
-            res.append(chr(119808 + (code - 65)))
-        elif 97 <= code <= 122:
-            res.append(chr(119834 + (code - 97)))
-        elif 48 <= code <= 57:
-            res.append(chr(120782 + (code - 48)))
-        else:
-            res.append(char)
-    return "".join(res)
+def to_unicode_bold(text: str) -> str:
+    """Mengubah karakter alfanumerik biasa menjadi huruf tebal Unicode Mathematical Bold."""
+    bold_map = {
+        'A':'𝐀','B':'𝐁','C':'𝐂','D':'𝐃','E':'𝐄','F':'𝐅','G':'𝐆','H':'𝐇','I':'𝐈','J':'𝐉','K':'𝐊','L':'𝐋','M':'𝐌',
+        'N':'𝐍','O':'𝐎','P':'𝐏','Q':'𝐐','R':'𝐑','S':'𝐒','T':'𝐓','U':'𝐔','V':'𝐕','W':'𝐖','X':'𝐗','Y':'𝐘','Z':'𝐙',
+        'a':'𝐚','b':'𝐛','c':'𝐜','d':'𝐝','e':'𝐞','f':'𝐟','g':'𝐠','h':'𝐡','i':'𝐢','j':'𝐣','k':'𝐤','l':'𝐥','m':'𝐦',
+        'n':'𝐧','o':'𝐨','p':'𝐩','q':'𝐪','r':'𝐫','s':'𝐬','t':'𝐭','u':'𝐮','v':'𝐯','w':'𝐰','x':'𝐱','y':'𝐲','z':'𝐳',
+        '0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗'
+    }
+    return ''.join(bold_map.get(char, char) for char in text)
 
 def clean_mountain_name(name):
     """Menghilangkan kata 'Gunung', 'Gn.', 'Bukit' agar murni nama gunungnya saja (contoh: Andong)"""
@@ -240,7 +237,7 @@ def extract_article_image(article_entry):
 def generate_nano_banana_art(prompt_subject):
     state["is_ai_art"] = True
     if not GEMINI_API_KEY:
-        print("GEMINI_API_KEY kosong untuk Nano Banana.")
+        print("GEMINI_API_KEY belum disetel di Secrets GitHub!")
         return False
 
     prompt = (
@@ -288,8 +285,29 @@ def generate_nano_banana_art(prompt_subject):
     return False
 
 # ==========================================
-# 4. KONTEN DRAF BERITA (STANDAR CAMPERSMAGZ)
+# 4. KONTEN DRAF BERITA (STANDAR RESMI CAMPERSMAGZ)
 # ==========================================
+SYSTEM_PROMPT = """
+Kamu adalah admin akun Instagram info pendakian (@campersmagz) yang juga pendaki berpengalaman.
+Gaya tulisanmu semi-formal: rapi, sopan, jelas, hangat, dan terpercaya. Nyaman dibaca usia 20 hingga 55 tahun.
+
+ATURAN AKURASI:
+- Gunakan HANYA fakta yang ada di bahan berita. DILARANG menambah data, angka, nama, atau lokasi yang tidak tercantum.
+- Jika ada info belum pasti, tulis apa adanya ("belum ada konfirmasi resmi").
+- Untuk kabar musibah/SAR, gunakan nada tenang dan empatik. Jangan clickbait.
+
+CARA MENULIS:
+1. Buka teras langsung pada inti kabar (contoh: "Jalur pendakian Gunung X ditutup sementara mulai besok.").
+2. Rangkai informasi 5W1H secara mengalir, jangan seperti daftar poin.
+3. Pada tubuh berita, jelaskan dampaknya bagi pendaki: apa yang perlu diwaspadai, disiapkan, atau dijadwalkan ulang.
+4. Di penutup, berikan pesan keselamatan singkat lalu akhiri dengan SATU Call to Action (pilih salah satu: komen, save, share, atau follow).
+
+GAYA DILARANG:
+- Frasa kaku: "Dilansir dari", "Berdasarkan informasi yang dihimpun", "Diketahui bahwa", "senantiasa", "dihimbau", "dikarenakan".
+- Kata obrolan/gaul: "nih", "sih", "lho", "deh", "banget", "nggak", "gimana", "guys".
+- Tanda AI: Pembuka klise ("Halo sobat pendaki"), pola "Bukan hanya X, tapi juga Y", tanda pisah panjang (—), huruf kapital semua, bullet point, dan emoji berlebihan (maksimal 2 emoji relevan seperti ⛰️ atau 🥾).
+"""
+
 def extract_clean_json(raw_text):
     cleaned = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned).strip()
@@ -299,102 +317,134 @@ def extract_clean_json(raw_text):
     return json.loads(cleaned)
 
 def generate_converter_content(article):
-    system_prompt = (
-        "Kamu adalah admin @campersmagz: pendaki berpengalaman yang hangat, semi-formal, setara, dan edukatif. "
-        "Ikuti formula baku penulisan 5 lapisan CampersMagz. "
-        "Hasilkan HANYA JSON murni tanpa markdown, tanpa pengantar, dan tanpa <think>:\n"
-        "{\n"
-        '  "kata_kunci_utama": "HANYA nama gunung/subjek TANPA kata Gunung/Gn (contoh: Andong / Arjuno-Welirang / Semeru / Slamet)",\n'
-        '  "opsi_judul": [\n'
-        '    "Judul 1 (Title Case, 8-12 kata, padat, menyambung wajar, diakhiri !)",\n'
-        '    "Judul 2 (Title Case, 8-12 kata, diakhiri !)",\n'
-        '    "Judul 3 (Title Case, 8-12 kata, diakhiri !?)"\n'
-        "  ],\n"
-        '  "teras_berita": "Paragraf 1: Teras Berita (1-2 kalimat padat inti kabar 5W1H tanpa basa-basi Halo Sobat)",\n'
-        '  "tubuh_berita": "Paragraf 2: Rincian fakta kronologi & dampak langsung bagi pendaki",\n'
-        '  "penutup_edukasi": "1 kalimat reflektif/pesan keselamatan berbobot yang menjadi punchline",\n'
-        '  "cta": "Tepat SATU kalimat Call To Action yang relevan (fokus Save/Share/Komen/Follow)",\n'
-        '  "sumber_media": "Nama media resmi sumber berita Title Case (contoh: Kompas.com / Detik.com)",\n'
-        '  "art_prompt": "Deskripsi adegan kartun 2D singkat bahasa Inggris",\n'
-        '  "mood_musik": "Pilih satu: urgent, somber, upbeat, atau chill"\n'
-        "}"
-    )
-    summary_cut = re.sub(r"<[^>]+>", "", article.get("summary", ""))[:400]
-    user_txt = f"Judul: {article.title}\nRingkasan: {summary_cut}"
+    summary_cut = re.sub(r"<[^>]+>", "", article.get("summary", ""))[:450]
+    user_txt = f"Bahan Berita:\nJudul: {article.title}\nRingkasan: {summary_cut}"
     error_logs = []
 
-    if GROQ_API_KEY:
-        try:
-            headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-            payload = {
-                "model": "qwen/qwen3.8-27b",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_txt + "\n/no_think"}
-                ],
-                "max_tokens": 950,
-                "temperature": 0.4
-            }
-            r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=20)
-            if r.status_code == 200:
-                return extract_clean_json(r.json()["choices"][0]["message"]["content"])
-            error_logs.append(f"Groq({r.status_code})")
-        except Exception as e:
-            error_logs.append(f"GroqErr({str(e)[:30]})")
-
-    if GH_TOKEN:
-        for gh_url in ["https://models.github.ai/inference/chat/completions", "https://models.inference.ai.azure.com/chat/completions"]:
-            try:
-                headers = {"Authorization": f"Bearer {GH_TOKEN}", "Content-Type": "application/json"}
-                payload = {
-                    "model": "gpt-4o-mini",
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_txt}
-                    ],
-                    "temperature": 0.4
-                }
-                r = requests.post(gh_url, headers=headers, json=payload, timeout=15)
-                if r.status_code == 200:
-                    return extract_clean_json(r.json()["choices"][0]["message"]["content"])
-                error_logs.append(f"GH({r.status_code})")
-            except Exception as e:
-                error_logs.append(f"GHErr({str(e)[:25]})")
-
+    # 1. Jalur Gemini REST dengan responseSchema Terstruktur Resmi
     if GEMINI_API_KEY:
         for gem_model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]:
             try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{gem_model}:generateContent?key={GEMINI_API_KEY}"
                 payload = {
-                    "contents": [{"parts": [{"text": f"{system_prompt}\n\nBerita:\n{user_txt}"}]}],
-                    "generationConfig": {"temperature": 0.4, "responseMimeType": "application/json"}
+                    "contents": [{"parts": [{"text": user_txt}]}],
+                    "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+                    "generationConfig": {
+                        "temperature": 0.35,
+                        "responseMimeType": "application/json",
+                        "responseSchema": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "judul": {"type": "STRING", "description": "Judul utama cover/caption maksimal 12 kata, title case, sopan, dan jujur."},
+                                "alternatif_judul": {"type": "ARRAY", "items": {"type": "STRING"}, "description": "5 alternatif hook judul lain yang relevan dan sopan."},
+                                "kata_kunci_utama": {"type": "STRING", "description": "1-2 kata nama gunung/lokasi murni TANPA kata Gunung/Gn (contoh: Andong, Rinjani)."},
+                                "frasa_tebal": {"type": "STRING", "description": "2-3 kata di dalam judul yang ditebalkan pada cover visual."},
+                                "teras": {"type": "STRING", "description": "Lead 1-2 kalimat langsung pada inti kabar 5W1H tanpa basa-basi."},
+                                "tubuh_berita": {"type": "STRING", "description": "Rincian fakta sumber + dampak/peringatan nyata bagi pendaki."},
+                                "penutup": {"type": "STRING", "description": "Pesan keselamatan/reflektif singkat ditutup SATU CTA (komen/save/share/follow)."},
+                                "sumber": {"type": "STRING", "description": "Nama media atau sumber rilis."},
+                                "mood_musik": {"type": "STRING", "description": "Pilih satu: urgent, somber, upbeat, atau chill"}
+                            },
+                            "required": ["judul", "alternatif_judul", "kata_kunci_utama", "frasa_tebal", "teras", "tubuh_berita", "penutup"]
+                        }
+                    }
                 }
-                r = requests.post(url, json=payload, timeout=20)
+                r = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=20)
                 if r.status_code == 200:
                     txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-                    return extract_clean_json(txt)
+                    data = extract_clean_json(txt)
+                    data["opsi_judul"] = [data["judul"]] + [x for x in data.get("alternatif_judul", []) if x != data["judul"]]
+                    data["sumber_media"] = data.get("sumber") or "Media"
+                    return data
                 error_logs.append(f"{gem_model}({r.status_code})")
             except Exception as e:
                 error_logs.append(f"{gem_model}Err({str(e)[:25]})")
 
+    # 2. Cadangan Groq REST API
+    if GROQ_API_KEY:
+        try:
+            headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+            groq_prompt = (
+                f"{SYSTEM_PROMPT}\n\nHasilkan output HANYA JSON murni dengan format:\n"
+                "{\n"
+                '  "judul": "Judul utama cover/caption maksimal 12 kata, title case, sopan, dan jujur.",\n'
+                '  "alternatif_judul": ["Opsi 1", "Opsi 2", "Opsi 3", "Opsi 4", "Opsi 5"],\n'
+                '  "kata_kunci_utama": "1-2 kata nama gunung murni TANPA kata Gunung/Gn",\n'
+                '  "frasa_tebal": "2-3 kata di dalam judul",\n'
+                '  "teras": "Lead 1-2 kalimat langsung inti kabar 5W1H tanpa basa-basi",\n'
+                '  "tubuh_berita": "Rincian fakta sumber + dampak nyata bagi pendaki",\n'
+                '  "penutup": "Pesan keselamatan singkat diakhiri SATU CTA",\n'
+                '  "sumber": "Nama media resmi sumber berita",\n'
+                '  "mood_musik": "urgent/somber/upbeat/chill"\n'
+                "}"
+            )
+            payload = {
+                "model": "qwen/qwen3.8-27b",
+                "messages": [
+                    {"role": "system", "content": groq_prompt},
+                    {"role": "user", "content": user_txt + "\n/no_think"}
+                ],
+                "max_tokens": 950,
+                "temperature": 0.35
+            }
+            r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=20)
+            if r.status_code == 200:
+                data = extract_clean_json(r.json()["choices"][0]["message"]["content"])
+                data["opsi_judul"] = [data["judul"]] + [x for x in data.get("alternatif_judul", []) if x != data["judul"]]
+                data["sumber_media"] = data.get("sumber") or "Media"
+                return data
+            error_logs.append(f"Groq({r.status_code})")
+        except Exception as e:
+            error_logs.append(f"GroqErr({str(e)[:30]})")
+
+    # 3. Cadangan GitHub Models REST API
+    if GH_TOKEN:
+        for gh_url in ["https://models.github.ai/inference/chat/completions", "https://models.inference.ai.azure.com/chat/completions"]:
+            try:
+                headers = {"Authorization": f"Bearer {GH_TOKEN}", "Content-Type": "application/json"}
+                gh_prompt = (
+                    f"{SYSTEM_PROMPT}\n\nHasilkan output HANYA JSON murni dengan properti: "
+                    "judul, alternatif_judul (array 5 judul), kata_kunci_utama, frasa_tebal, teras, tubuh_berita, penutup, sumber, mood_musik."
+                )
+                payload = {
+                    "model": "gpt-4o-mini",
+                    "messages": [
+                        {"role": "system", "content": gh_prompt},
+                        {"role": "user", "content": user_txt}
+                    ],
+                    "temperature": 0.35
+                }
+                r = requests.post(gh_url, headers=headers, json=payload, timeout=15)
+                if r.status_code == 200:
+                    data = extract_clean_json(r.json()["choices"][0]["message"]["content"])
+                    data["opsi_judul"] = [data["judul"]] + [x for x in data.get("alternatif_judul", []) if x != data["judul"]]
+                    data["sumber_media"] = data.get("sumber") or "Media"
+                    return data
+                error_logs.append(f"GH({r.status_code})")
+            except Exception as e:
+                error_logs.append(f"GHErr({str(e)[:25]})")
+
     raise RuntimeError(f"Semua AI gagal: {' | '.join(error_logs)}")
 
 def build_full_article_text():
+    """Menyusun teks caption siap upload persis formula baku CampersMagz"""
     d = state["converter_data"]
-    judul_unicode_bold = to_unicode_bold(state["selected_title"].strip())
-    p1 = d.get("teras_berita", "").strip()
-    p2 = d.get("tubuh_berita", "").strip()
-    penutup = d.get("penutup_edukasi", "").strip()
-    cta = d.get("cta", "").strip()
-    p3 = f"{penutup} {cta}".strip()
-    sumber = f"Sumber: {d.get('sumber_media', 'Media').strip()}"
-    return f"{judul_unicode_bold}\n\n{p1}\n\n{p2}\n\n{p3}\n\n{sumber}"
+    judul_bold = to_unicode_bold(state["selected_title"].strip())
+    sumber_val = d.get("sumber") or d.get("sumber_media") or ""
+    sumber_line = f"\n\nSumber: {sumber_val.strip()}" if sumber_val.strip() else ""
+
+    return (
+        f"{judul_bold}\n\n"
+        f"{d.get('teras', '').strip()}\n\n"
+        f"{d.get('tubuh_berita', '').strip()}\n\n"
+        f"{d.get('penutup', '').strip()}"
+        f"{sumber_line}"
+    )
 
 # ==========================================
 # 5. DESAIN COVER PERSIS KOORDINAT
 # ==========================================
 def draw_cover_tent_logo(canvas, last_char_right, last_char_top):
-    """Menempelkan sudut kiri bawah logo tenda tepat di sudut kanan atas huruf terakhir"""
     tenda_file = find_asset_file(
         ["Logo_tenda_cover.png", "logo_tenda_cover.png", "logo_tenda.png", "tenda.png", "tenda_cover.png"],
         ["tenda", "tent"]
@@ -406,8 +456,6 @@ def draw_cover_tent_logo(canvas, last_char_right, last_char_top):
             if t_bbox:
                 t_img = t_img.crop(t_bbox)
             tw, th = t_img.size
-
-            # Sudut kiri bawah logo menempel tepat di sudut kanan atas huruf
             tx = int(last_char_right - 2)
             ty = int(last_char_top - th + 4)
             tx = max(0, min(tx, 1080 - tw - 10))
@@ -416,7 +464,6 @@ def draw_cover_tent_logo(canvas, last_char_right, last_char_top):
         except Exception as e:
             print(f"Error load Logo_tenda_cover: {e}")
 
-    # Fallback gambar tenda jika aset PNG belum di-upload
     draw = ImageDraw.Draw(canvas)
     w = 46
     h = int(w * 0.85)
@@ -467,7 +514,6 @@ def draw_cover_bottom_logo(canvas):
     draw.text((tx, ty - 2), "CAMPERSMAGZ", font=f_b, fill=(255, 255, 255, 255))
 
 def format_cover_headline(judul, max_w=900):
-    """Membagi judul maksimal 2 baris, seimbang penuh kiri-kanan, dan ukuran font optimal"""
     words = judul.split()
     if not words:
         return [], get_nunito_font(44, bold=True), 44
@@ -506,10 +552,8 @@ def create_converter_cover():
     pill_bg = (224, 224, 224, 255)
     footer_grey_hex = "#616264"
 
-    # 1. Logo Atas
     draw_top_dark_logo_exact(canvas)
 
-    # 2. Kata Kunci Gunung (Tanpa kata "Gunung", contoh: "Andong" / "Arjuno-Welirang")
     raw_kw = state["converter_data"].get("kata_kunci_utama", "Info Gunung")
     kata_kunci = clean_mountain_name(raw_kw)
 
@@ -523,28 +567,26 @@ def create_converter_cover():
         kw_w = bbox_kw[2] - bbox_kw[0]
         kw_h = bbox_kw[3] - bbox_kw[1]
 
-        # GAMBAR HIGHLIGHT DI BELAKANG TERLEBIH DAHULU (PAINTER'S ALGORITHM)
+        # 1. Gambar highlight di belakang teks terlebih dahulu
         pill_y1 = start_y + bbox_kw[1] + int(kw_h * 0.52)
         pill_y2 = start_y + bbox_kw[3] + 4
         pill_x1 = start_x - 8
         pill_x2 = start_x + bbox_kw[2] + 16
         draw.rounded_rectangle([pill_x1, pill_y1, pill_x2, pill_y2], radius=14, fill=pill_bg)
 
-        # GAMBAR TEKS JUDUL KATA KUNCI DI DEPAN HIGHLIGHT
+        # 2. Gambar teks kata kunci di depan highlight
         draw.text((start_x, start_y), kata_kunci, font=font_big, fill=text_dark)
 
-        # HITUNG POSISI PRESISI HURUF TERAKHIR AGAR TENDA MENEMPEL
+        # 3. Hitung koordinat huruf terakhir agar tenda menempel presisi
         last_char = kata_kunci[-1]
         prefix = kata_kunci[:-1]
         prefix_len = font_big.getlength(prefix)
         char_box = font_big.getbbox(last_char)
         last_char_right = start_x + prefix_len + char_box[2]
         last_char_top = start_y + char_box[1]
-
-        # GAMBAR LOGO TENDA MENEMPEL DI KANAN ATAS HURUF TERAKHIR
         draw_cover_tent_logo(canvas, last_char_right, last_char_top)
 
-        # 3. Judul Berita (Maksimal 2 baris, terisi penuh seimbang)
+        # 4. Judul berita maksimal 2 baris seimbang
         judul = state["selected_title"].strip()
         lines, font_sub, f_sub_size = format_cover_headline(judul, max_w=900)
 
@@ -554,7 +596,7 @@ def create_converter_cover():
             draw.text((90, y_sub), line, font=font_sub, fill=text_dark)
             y_sub += line_spacing
 
-        # 4. Kotak Gambar Berita Asli (Rounded Rectangle)
+        # 5. Gambar berita asli dalam rounded rectangle
         if os.path.exists(state["cover_source_img"]):
             src_img = Image.open(state["cover_source_img"]).convert("RGBA")
             box_w, box_h = 870, 520
@@ -575,7 +617,6 @@ def create_converter_cover():
             canvas.paste(src_img, (105, y_img), mask)
 
     else:
-        # Layout Kartun Nano Banana
         if os.path.exists(state["cover_source_img"]):
             art_img = Image.open(state["cover_source_img"]).convert("RGBA")
             art_img = art_img.resize((1080, 1080), Image.Resampling.LANCZOS)
@@ -594,14 +635,14 @@ def create_converter_cover():
                 draw_cover_tent_logo(canvas, tx + tw, y_txt + bbox[1])
             y_txt += line_spacing
 
-    # 5. Kapsul Abu-Abu Bawah & Logo Bawah
+    # 6. Kapsul highlight abu-abu bawah & logo
     draw.rounded_rectangle([60, 1805, 1020, 1862], radius=28, fill=footer_grey_hex)
     draw_cover_bottom_logo(canvas)
 
-    # 6. Sumber Berita Kanan Bawah
+    # 7. Sumber berita kanan bawah
     font_cr = get_nunito_font(16, bold=False)
-    med = state["converter_data"]["sumber_media"].lower()
-    sumber_kr = "foto: gemini" if state["is_ai_art"] else f"foto: {med}"
+    sumber_val = state["converter_data"].get("sumber") or state["converter_data"].get("sumber_media") or "media"
+    sumber_kr = f"foto: {sumber_val.strip().lower()}"
     bbox_cr = draw.textbbox((0, 0), sumber_kr, font=font_cr)
     cr_w = bbox_cr[2] - bbox_cr[0]
     cr_h = bbox_cr[3] - bbox_cr[1]
@@ -676,8 +717,8 @@ def create_video_overlays(custom_source=None):
             print(f"Error load Logo_Atas_Video: {e}")
 
     font_system = get_video_system_font(16)
-    med = state["converter_data"]["sumber_media"]
-    sumber_lbl = custom_source if custom_source else f"Foto: {med}"
+    sumber_val = state["converter_data"].get("sumber") or state["converter_data"].get("sumber_media") or "Media"
+    sumber_lbl = custom_source if custom_source else f"Foto: {sumber_val}"
     draw_l = ImageDraw.Draw(canvas_logos)
     bbox_s = draw_l.textbbox((0, 0), sumber_lbl, font=font_system)
     sw = bbox_s[2] - bbox_s[0]
@@ -868,7 +909,7 @@ def handle_callbacks(call):
         elif data == "cover_nano":
             bot.answer_callback_query(call.id, "Menjalankan Nano Banana...")
             bot.send_message(TELEGRAM_CHAT_ID, "🎨 Membuat Graphic Art dengan Nano Banana...")
-            success = generate_nano_banana_art(state["converter_data"]["art_prompt"])
+            success = generate_nano_banana_art(state["converter_data"]["kata_kunci_utama"])
             if success:
                 cover_path = create_converter_cover()
                 send_cover_preview(cover_path)
@@ -932,7 +973,7 @@ def send_caption_review():
         InlineKeyboardButton("✅ Pilih Caption Ini", callback_data="cap_keep"),
         InlineKeyboardButton("🔄 Generate Caption Lain", callback_data="cap_regen")
     )
-    bot.send_message(TELEGRAM_CHAT_ID, f"📝 *REVIEW CAPTION (STANDAR CAMPERSMAGZ):*\n\n{cap}", reply_markup=markup)
+    bot.send_message(TELEGRAM_CHAT_ID, f"📝 *REVIEW CAPTION RESMI CAMPERSMAGZ:*\n\n{cap}", reply_markup=markup)
 
 @bot.message_handler(content_types=["photo"])
 def handle_user_cover_photo(message):
@@ -957,8 +998,8 @@ def handle_user_video(message):
     dl = bot.download_file(f_info.file_path)
     with open(state["uploaded_video_path"], "wb") as f:
         f.write(dl)
-    med = state["converter_data"]["sumber_media"]
-    s_raw = message.caption.strip() if message.caption else med
+    sumber_val = state["converter_data"].get("sumber") or state["converter_data"].get("sumber_media") or "Media"
+    s_raw = message.caption.strip() if message.caption else sumber_val
     if not s_raw.lower().startswith(("video:", "foto:")):
         s_raw = f"Video: {s_raw}"
     state["custom_source_text"] = s_raw
@@ -976,8 +1017,8 @@ def send_final_package(mp4_path):
     judul_unicode = to_unicode_bold(state["selected_title"].strip())
     with open(state["final_cover_img"], "rb") as cov:
         bot.send_photo(TELEGRAM_CHAT_ID, cov, caption="✅ *COVER FINAL*", parse_mode="Markdown")
-    med = state["converter_data"]["sumber_media"]
-    v_cap = f"{judul_unicode}\n\nSumber: {med}"
+    sumber_val = state["converter_data"].get("sumber") or state["converter_data"].get("sumber_media") or "Media"
+    v_cap = f"{judul_unicode}\n\nSumber: {sumber_val}"
     with open(mp4_path, "rb") as vid:
         bot.send_video(TELEGRAM_CHAT_ID, vid, caption=v_cap)
     
