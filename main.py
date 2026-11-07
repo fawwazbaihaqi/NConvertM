@@ -4,7 +4,6 @@ import re
 import base64
 import urllib.parse
 import subprocess
-import zipfile
 from io import BytesIO
 import requests
 import feedparser
@@ -43,10 +42,9 @@ state = {
 }
 
 # ==========================================
-# 2. HELPER UNICODE BOLD & SISTEM FONT
+# 2. HELPER UNICODE BOLD & SISTEM FONT NUNITO TERVERIFIKASI
 # ==========================================
 def to_unicode_bold(text: str) -> str:
-    """Mengubah karakter alfanumerik biasa menjadi huruf tebal Unicode Mathematical Bold."""
     bold_map = {
         'A':'𝐀','B':'𝐁','C':'𝐂','D':'𝐃','E':'𝐄','F':'𝐅','G':'𝐆','H':'𝐇','I':'𝐈','J':'𝐉','K':'𝐊','L':'𝐋','M':'𝐌',
         'N':'𝐍','O':'𝐎','P':'𝐏','Q':'𝐐','R':'𝐑','S':'𝐒','T':'𝐓','U':'𝐔','V':'𝐕','W':'𝐖','X':'𝐗','Y':'𝐘','Z':'𝐙',
@@ -57,7 +55,6 @@ def to_unicode_bold(text: str) -> str:
     return ''.join(bold_map.get(char, char) for char in text)
 
 def clean_mountain_name(name):
-    """Menghilangkan kata 'Gunung', 'Gn.', 'Bukit' agar murni nama gunungnya saja (contoh: Andong)"""
     if not name:
         return "Info Gunung"
     cleaned = re.sub(r"^(?:gunung|gn\.|g\.|bukit)\s+", "", name, flags=re.IGNORECASE).strip()
@@ -66,45 +63,53 @@ def clean_mountain_name(name):
     return cleaned.title() if cleaned else name
 
 def ensure_custom_fonts():
+    """Mengunduh font Nunito asli dari URL raw terverifikasi dan memastikan ukuran valid"""
     headers = {"User-Agent": "Mozilla/5.0"}
-    if not (os.path.exists("Nunito-Bold.ttf") and os.path.exists("Nunito-Regular.ttf")):
-        try:
-            print("Mengunduh font resmi Nunito dari Google Fonts...")
-            r = requests.get("https://fonts.google.com/download?family=Nunito", headers=headers, timeout=20)
-            if r.status_code == 200:
-                with zipfile.ZipFile(BytesIO(r.content)) as z:
-                    for filename in z.namelist():
-                        if filename.endswith("Nunito-Bold.ttf"):
-                            with open("Nunito-Bold.ttf", "wb") as f:
-                                f.write(z.read(filename))
-                        elif filename.endswith("Nunito-Regular.ttf"):
-                            with open("Nunito-Regular.ttf", "wb") as f:
-                                f.write(z.read(filename))
-        except Exception as e:
-            print(f"Gagal unduh Nunito ZIP: {e}")
-
-    cdn_fallbacks = {
-        "Nunito-Bold.ttf": "https://cdn.jsdelivr.net/gh/googlefonts/nunito@main/fonts/ttf/Nunito-Bold.ttf",
-        "Nunito-Regular.ttf": "https://cdn.jsdelivr.net/gh/googlefonts/nunito@main/fonts/ttf/Nunito-Regular.ttf",
-        "Roboto-Regular.ttf": "https://cdn.jsdelivr.net/gh/googlefonts/roboto@main/src/hinted/Roboto-Regular.ttf",
-        "Montserrat-Bold.ttf": "https://cdn.jsdelivr.net/gh/JulietaUla/Montserrat@master/fonts/ttf/Montserrat-Bold.ttf"
+    font_urls = {
+        "Nunito-Bold.ttf": [
+            "https://github.com/googlefonts/nunito/raw/master/fonts/TTF/Nunito-Bold.ttf",
+            "https://raw.githubusercontent.com/carlesnunez/react-native-weather-app/master/android/app/src/main/assets/fonts/Nunito-Bold.ttf"
+        ],
+        "Nunito-Regular.ttf": [
+            "https://github.com/googlefonts/nunito/raw/master/fonts/TTF/Nunito-Regular.ttf",
+            "https://raw.githubusercontent.com/carlesnunez/react-native-weather-app/master/android/app/src/main/assets/fonts/Nunito-Regular.ttf"
+        ],
+        "Roboto-Regular.ttf": [
+            "https://github.com/googlefonts/roboto/raw/main/src/hinted/Roboto-Regular.ttf"
+        ],
+        "Montserrat-Bold.ttf": [
+            "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Bold.ttf"
+        ]
     }
-    for f_name, url in cdn_fallbacks.items():
-        if not os.path.exists(f_name):
-            try:
-                r = requests.get(url, headers=headers, timeout=12)
-                if r.status_code == 200:
-                    with open(f_name, "wb") as f:
-                        f.write(r.content)
-            except Exception as e:
-                print(f"Fallback {f_name} skip: {e}")
+    for filename, urls in font_urls.items():
+        if not os.path.exists(filename) or os.path.getsize(filename) < 10000:
+            for u in urls:
+                try:
+                    r = requests.get(u, headers=headers, timeout=15)
+                    if r.status_code == 200 and len(r.content) > 10000:
+                        with open(filename, "wb") as f:
+                            f.write(r.content)
+                        print(f"Font terverifikasi: {filename} ({len(r.content)} bytes)")
+                        break
+                except Exception as e:
+                    print(f"Gagal unduh {filename} dari {u}: {e}")
 
 ensure_custom_fonts()
 
 def get_nunito_font(size, bold=True):
-    font_path = "Nunito-Bold.ttf" if bold else "Nunito-Regular.ttf"
-    if os.path.exists(font_path):
-        return ImageFont.truetype(font_path, int(size))
+    target_file = "Nunito-Bold.ttf" if bold else "Nunito-Regular.ttf"
+    if os.path.exists(target_file) and os.path.getsize(target_file) > 10000:
+        return ImageFont.truetype(target_file, int(size))
+    
+    # Cek folder paket Linux fonts-nunito
+    system_paths = [
+        f"/usr/share/fonts/truetype/nunito/{target_file}",
+        "/usr/share/fonts/truetype/nunito/Nunito-Bold.ttf" if bold else "/usr/share/fonts/truetype/nunito/Nunito-Regular.ttf"
+    ]
+    for sp in system_paths:
+        if os.path.exists(sp):
+            return ImageFont.truetype(sp, int(size))
+
     fallback = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     if os.path.exists(fallback):
         return ImageFont.truetype(fallback, int(size))
@@ -143,7 +148,7 @@ def find_asset_file(exact_names, fallback_keywords):
     return None
 
 # ==========================================
-# 3. SCRAPER BERITA & NANO BANANA ART
+# 3. SCRAPER BERITA & NANO BANANA ART (DILENGKAPI DIAGNOSTIK ERROR)
 # ==========================================
 def fetch_articles():
     q = "berita+pendakian+gunung&hl=id&gl=ID&ceid=ID:id"
@@ -232,13 +237,14 @@ def extract_article_image(article_entry):
         pass
 
     clean_title = article_entry.title.rsplit("-", 1)[0].strip()
-    return generate_nano_banana_art(clean_title)
+    success, _ = generate_nano_banana_art(clean_title)
+    return success
 
 def generate_nano_banana_art(prompt_subject):
+    """Memanggil Google AI Studio Imagen 3 / Gemini Multimodal dengan pesan status akurat"""
     state["is_ai_art"] = True
     if not GEMINI_API_KEY:
-        print("GEMINI_API_KEY belum disetel di Secrets GitHub!")
-        return False
+        return False, "GEMINI_API_KEY belum disetel di Secrets GitHub!"
 
     prompt = (
         f"2D editorial comic cartoon vector illustration of {prompt_subject}, "
@@ -248,41 +254,49 @@ def generate_nano_banana_art(prompt_subject):
     )
 
     errors = []
-    try:
-        url = "https://generativelanguage.googleapis.com/v1beta/openai/images/generations"
-        headers = {"Authorization": f"Bearer {GEMINI_API_KEY}", "Content-Type": "application/json"}
-        payload = {"model": "gemini-2.5-flash-image", "prompt": prompt, "response_format": "b64_json", "n": 1}
-        r = requests.post(url, headers=headers, json=payload, timeout=35)
-        if r.status_code == 200:
-            b64_data = r.json()["data"][0]["b64_json"]
-            img = Image.open(BytesIO(base64.b64decode(b64_data))).convert("RGB")
-            img.save(state["cover_source_img"])
-            return True
-        errors.append(f"AIStudio-OpenAI({r.status_code})")
-    except Exception as e:
-        errors.append(f"AIStudioErr({str(e)[:30]})")
 
+    # 1. Google AI Studio Imagen 3
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key={GEMINI_API_KEY}"
+        payload = {
+            "instances": [{"prompt": prompt}],
+            "parameters": {"sampleCount": 1, "aspectRatio": "1:1"}
+        }
+        r = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=35)
+        if r.status_code == 200:
+            predictions = r.json().get("predictions", [])
+            if predictions and "bytesBase64Encoded" in predictions[0]:
+                b64_data = predictions[0]["bytesBase64Encoded"]
+                img = Image.open(BytesIO(base64.b64decode(b64_data))).convert("RGB")
+                img.save(state["cover_source_img"])
+                return True, "Sukses via Imagen 3"
+        errors.append(f"Imagen3({r.status_code}: {r.text[:60]})")
+    except Exception as e:
+        errors.append(f"Imagen3Err({str(e)[:30]})")
+
+    # 2. Gemini Multimodal generateContent
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key={GEMINI_API_KEY}"
         payload = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]}
         }
         r = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=35)
         if r.status_code == 200:
-            parts = r.json().get("candidates", [{}])[0].get("content", {}).get("parts", [])
-            for p in parts:
-                inline = p.get("inlineData") or p.get("inline_data")
-                if inline and "data" in inline:
-                    img = Image.open(BytesIO(base64.b64decode(inline["data"]))).convert("RGB")
-                    img.save(state["cover_source_img"])
-                    return True
-        errors.append(f"NativeGemini({r.status_code})")
+            candidates = r.json().get("candidates", [])
+            if candidates:
+                parts = candidates[0].get("content", {}).get("parts", [])
+                for p in parts:
+                    inline = p.get("inlineData") or p.get("inline_data")
+                    if inline and "data" in inline:
+                        img = Image.open(BytesIO(base64.b64decode(inline["data"]))).convert("RGB")
+                        img.save(state["cover_source_img"])
+                        return True, "Sukses via Gemini 2.5 Flash Image"
+        errors.append(f"GeminiImage({r.status_code}: {r.text[:60]})")
     except Exception as e:
-        errors.append(f"NativeGeminiErr({str(e)[:30]})")
+        errors.append(f"GeminiImageErr({str(e)[:30]})")
 
-    print(f"Nano Banana gagal: {' | '.join(errors)}")
-    return False
+    return False, " | ".join(errors)
 
 # ==========================================
 # 4. KONTEN DRAF BERITA (STANDAR RESMI CAMPERSMAGZ)
@@ -321,7 +335,7 @@ def generate_converter_content(article):
     user_txt = f"Bahan Berita:\nJudul: {article.title}\nRingkasan: {summary_cut}"
     error_logs = []
 
-    # 1. Jalur Gemini REST dengan responseSchema Terstruktur Resmi
+    # 1. Gemini REST API (Prioritas Utama)
     if GEMINI_API_KEY:
         for gem_model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]:
             try:
@@ -335,15 +349,15 @@ def generate_converter_content(article):
                         "responseSchema": {
                             "type": "OBJECT",
                             "properties": {
-                                "judul": {"type": "STRING", "description": "Judul utama cover/caption maksimal 12 kata, title case, sopan, dan jujur."},
-                                "alternatif_judul": {"type": "ARRAY", "items": {"type": "STRING"}, "description": "5 alternatif hook judul lain yang relevan dan sopan."},
-                                "kata_kunci_utama": {"type": "STRING", "description": "1-2 kata nama gunung/lokasi murni TANPA kata Gunung/Gn (contoh: Andong, Rinjani)."},
-                                "frasa_tebal": {"type": "STRING", "description": "2-3 kata di dalam judul yang ditebalkan pada cover visual."},
-                                "teras": {"type": "STRING", "description": "Lead 1-2 kalimat langsung pada inti kabar 5W1H tanpa basa-basi."},
-                                "tubuh_berita": {"type": "STRING", "description": "Rincian fakta sumber + dampak/peringatan nyata bagi pendaki."},
-                                "penutup": {"type": "STRING", "description": "Pesan keselamatan/reflektif singkat ditutup SATU CTA (komen/save/share/follow)."},
-                                "sumber": {"type": "STRING", "description": "Nama media atau sumber rilis."},
-                                "mood_musik": {"type": "STRING", "description": "Pilih satu: urgent, somber, upbeat, atau chill"}
+                                "judul": {"type": "STRING"},
+                                "alternatif_judul": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                "kata_kunci_utama": {"type": "STRING"},
+                                "frasa_tebal": {"type": "STRING"},
+                                "teras": {"type": "STRING"},
+                                "tubuh_berita": {"type": "STRING"},
+                                "penutup": {"type": "STRING"},
+                                "sumber": {"type": "STRING"},
+                                "mood_musik": {"type": "STRING"}
                             },
                             "required": ["judul", "alternatif_judul", "kata_kunci_utama", "frasa_tebal", "teras", "tubuh_berita", "penutup"]
                         }
@@ -427,7 +441,6 @@ def generate_converter_content(article):
     raise RuntimeError(f"Semua AI gagal: {' | '.join(error_logs)}")
 
 def build_full_article_text():
-    """Menyusun teks caption siap upload persis formula baku CampersMagz"""
     d = state["converter_data"]
     judul_bold = to_unicode_bold(state["selected_title"].strip())
     sumber_val = d.get("sumber") or d.get("sumber_media") or ""
@@ -567,7 +580,7 @@ def create_converter_cover():
         kw_w = bbox_kw[2] - bbox_kw[0]
         kw_h = bbox_kw[3] - bbox_kw[1]
 
-        # 1. Gambar highlight di belakang teks terlebih dahulu
+        # 1. Gambar highlight abu-abu DI BELAKANG teks
         pill_y1 = start_y + bbox_kw[1] + int(kw_h * 0.52)
         pill_y2 = start_y + bbox_kw[3] + 4
         pill_x1 = start_x - 8
@@ -577,7 +590,7 @@ def create_converter_cover():
         # 2. Gambar teks kata kunci di depan highlight
         draw.text((start_x, start_y), kata_kunci, font=font_big, fill=text_dark)
 
-        # 3. Hitung koordinat huruf terakhir agar tenda menempel presisi
+        # 3. Logo tenda menempel langsung di kanan atas huruf terakhir
         last_char = kata_kunci[-1]
         prefix = kata_kunci[:-1]
         prefix_len = font_big.getlength(prefix)
@@ -908,11 +921,20 @@ def handle_callbacks(call):
             send_cover_preview(cover_path)
         elif data == "cover_nano":
             bot.answer_callback_query(call.id, "Menjalankan Nano Banana...")
-            bot.send_message(TELEGRAM_CHAT_ID, "🎨 Membuat Graphic Art dengan Nano Banana...")
-            success = generate_nano_banana_art(state["converter_data"]["kata_kunci_utama"])
+            bot.send_message(TELEGRAM_CHAT_ID, "🎨 Sedang membuat Graphic Art dengan Nano Banana...")
+            kw = state["converter_data"].get("kata_kunci_utama", "pendaki gunung")
+            success, msg_detail = generate_nano_banana_art(kw)
             if success:
                 cover_path = create_converter_cover()
+                bot.send_message(TELEGRAM_CHAT_ID, "✅ *Cover Nano Banana berhasil diperbarui!*", parse_mode="Markdown")
                 send_cover_preview(cover_path)
+            else:
+                bot.send_message(
+                    TELEGRAM_CHAT_ID,
+                    f"⚠️ *Nano Banana tidak dapat membuat gambar:*\n`{msg_detail}`\n\n"
+                    "💡 *Solusi:* Silakan klik tombol *Upload Foto Cover Sendiri* di atas untuk memasang gambar secara langsung.",
+                    parse_mode="Markdown"
+                )
         elif data == "cover_upload":
             state["waiting_for_cover_upload"] = True
             bot.answer_callback_query(call.id, "Silakan upload foto...")
