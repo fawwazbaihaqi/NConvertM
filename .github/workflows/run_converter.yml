@@ -2,8 +2,9 @@ name: CampersMagz News Converter
 
 on:
   schedule:
+    # Berjalan otomatis setiap 2 jam sekali
     - cron: '0 */2 * * *'
-  workflow_dispatch:
+  workflow_dispatch: # Tombol manual "Run workflow" di tab Actions
 
 jobs:
   run-converter:
@@ -16,7 +17,7 @@ jobs:
       - name: Install System Fonts & FFmpeg
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation
+          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation fonts-nunito
 
       - name: Set up Python
         uses: actions/setup-python@v5
