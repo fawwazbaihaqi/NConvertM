@@ -472,7 +472,7 @@ def build_full_article_text():
     )
 
 # ==========================================
-# 5. DESAIN COVER PERSIS ACUAN CANVA "GAMKONORA"
+# 5. DESAIN COVER PERSIS GAMKONORA (DILENGKAPI AUTO-SCALE SUB-JUDUL)
 # ==========================================
 def draw_cover_tent_logo(canvas, last_char_right, last_char_top):
     tenda_file = find_asset_file(
@@ -533,7 +533,7 @@ def draw_cover_bottom_logo(canvas):
             bbox = l_bot.getbbox()
             if bbox:
                 l_bot = l_bot.crop(bbox)
-            l_bot = l_bot.resize((tw, th), Image.Resampling.LANCZOS)
+            l_bot = l_bot.resize((235, 42), Image.Resampling.LANCZOS)
             canvas.alpha_composite(l_bot, (tx, ty))
             return
         except Exception as e:
@@ -544,36 +544,48 @@ def draw_cover_bottom_logo(canvas):
     draw.text((tx, ty - 2), "CAMPERSMAGZ", font=f_b, fill=(255, 255, 255, 255))
 
 def format_cover_headline_gamkonora(judul, max_w=870):
+    """
+    Menata sub-judul agar terisi penuh secara proporsional:
+    - Ukuran font adaptif dari 52px hingga 34px (tidak kecil 30px lagi, tapi tidak sebesar judul 92px).
+    - Membagi secara otomatis menjadi maksimal 2 baris seimbang yang memenuhi lebar foto (870px).
+    """
     words = judul.split()
     if not words:
-        return [], 36
+        return [], 48
 
-    for f_size in [36, 35, 34, 32, 30]:
+    for f_size in range(52, 33, -2):
         font = get_nunito_font(f_size, weight="regular")
-        lines = []
-        cur = []
-        for w in words:
-            test_str = " ".join(cur + [w])
-            bbox = font.getbbox(test_str)
-            if (bbox[2] - bbox[0]) <= max_w:
-                cur.append(w)
-            else:
-                if cur:
-                    lines.append(" ".join(cur))
-                cur = [w]
-        if cur:
-            lines.append(" ".join(cur))
+        w_full = font.getbbox(" ".join(words))[2] - font.getbbox(" ".join(words))[0]
 
-        if len(lines) <= 2:
-            return lines, f_size
+        # Jika judul pendek (misal 2-3 kata) dan muat proporsional 1 baris
+        if len(words) <= 3 and w_full <= max_w:
+            return [" ".join(words)], f_size
 
+        # Bagi menjadi 2 baris seimbang agar penuh kiri-kanan
+        best_split = None
+        min_diff = float("inf")
+        for i in range(1, len(words)):
+            l1 = " ".join(words[:i])
+            l2 = " ".join(words[i:])
+            w1 = font.getbbox(l1)[2] - font.getbbox(l1)[0]
+            w2 = font.getbbox(l2)[2] - font.getbbox(l2)[0]
+            if w1 <= max_w and w2 <= max_w:
+                diff = abs(w1 - w2)
+                if diff < min_diff:
+                    min_diff = diff
+                    best_split = (l1, l2)
+
+        if best_split:
+            return [best_split[0], best_split[1]], f_size
+
+    font = get_nunito_font(32, weight="regular")
     mid = (len(words) + 1) // 2
-    return [" ".join(words[:mid]), " ".join(words[mid:])], 30
+    return [" ".join(words[:mid]), " ".join(words[mid:])], 32
 
 def draw_cover_headline_selective_bold(draw, start_x, start_y, lines, f_size, bold_phrase, text_dark):
     font_reg = get_nunito_font(f_size, weight="regular")
     font_bld = get_nunito_font(f_size, weight="bold")
-    line_spacing = int(f_size * 1.28)
+    line_spacing = int(f_size * 1.30)
 
     bold_tokens = set(re.findall(r'\w+', bold_phrase.lower())) if bold_phrase else set()
 
@@ -607,7 +619,7 @@ def create_converter_cover():
     # 1. Logo Atas
     draw_top_dark_logo_exact(canvas)
 
-    # 2. Kata Kunci Nama Gunung (Persis "Gamkonora")
+    # 2. Kata Kunci Nama Gunung (Contoh: "Semeru" 92px Bold)
     raw_kw = state["converter_data"].get("kata_kunci_utama", "Info Gunung")
     kata_kunci = clean_mountain_name(raw_kw)
 
@@ -639,14 +651,15 @@ def create_converter_cover():
         last_char_top = start_y + char_box[1]
         draw_cover_tent_logo(canvas, last_char_right, last_char_top)
 
-        # 3. Sub-Judul Berita
+        # 3. Sub-Judul Berita (Otomatis Proporsional Penuh Kiri-Kanan)
         judul = state["selected_title"].strip()
         lines, f_sub_size = format_cover_headline_gamkonora(judul, max_w=870)
-        y_sub = pill_y2 + 36
+        y_sub = pill_y2 + 32
         bold_phrase = state.get("bold_phrase", "")
-        draw_cover_headline_selective_bold(draw, 105, y_sub, lines[:2], f_sub_size, bold_phrase, text_dark)
+        y_end_text = draw_cover_headline_selective_bold(draw, 105, y_sub, lines[:2], f_sub_size, bold_phrase, text_dark)
 
-        # 4. Foto Berita Asli (Y=670, 870x520)
+        # 4. Foto Berita Asli (Posisi Adaptif Menyesuaikan Tinggi Teks)
+        y_img = max(650, y_end_text + 38)
         if os.path.exists(state["cover_source_img"]):
             src_img = Image.open(state["cover_source_img"]).convert("RGBA")
             box_w, box_h = 870, 520
@@ -663,7 +676,7 @@ def create_converter_cover():
             mask = Image.new("L", (box_w, box_h), 0)
             m_draw = ImageDraw.Draw(mask)
             m_draw.rounded_rectangle([0, 0, box_w, box_h], radius=32, fill=255)
-            canvas.paste(src_img, (105, 670), mask)
+            canvas.paste(src_img, (105, y_img), mask)
 
     else:
         if os.path.exists(state["cover_source_img"]):
@@ -681,7 +694,7 @@ def create_converter_cover():
     draw.rounded_rectangle([60, 1805, 1020, 1862], radius=28, fill=footer_grey_hex)
     draw_cover_bottom_logo(canvas)
 
-    # 6. Sumber Berita Kanan Bawah Cover (Mendukung Custom Cover Source)
+    # 6. Sumber Berita Kanan Bawah Cover
     font_cr = get_nunito_font(16, weight="regular")
     if state.get("custom_cover_source"):
         sumber_val = state["custom_cover_source"]
@@ -764,12 +777,11 @@ def create_video_overlays(custom_source=None):
         except Exception as e:
             print(f"Error load Logo_Atas_Video: {e}")
 
-    # Sumber Video: Dinamis mengikuti sumber foto cover / sumber video unggahan
+    # Sumber Video: Mengikuti sumber cover / sumber video unggahan
     font_system = get_video_system_font(16)
     if custom_source:
         sumber_lbl = custom_source
     else:
-        # Jika video dibuat dari Pan Image Cover
         if state.get("custom_cover_source"):
             src_val = state["custom_cover_source"]
         elif state.get("is_ai_art"):
@@ -976,7 +988,7 @@ def send_bold_options():
     txt = (
         f"🎨 *PILIH GAYA PENEGASAN (BOLD) SUB-JUDUL COVER:*\n\n"
         f"Judul Terpilih:\n*{state['selected_title']}*\n\n"
-        f"💡 _Tips: Pilih 'Semua Reguler' untuk tampilan 100% rapi dan seimbang seperti Canva Gamkonora._"
+        f"💡 _Tips: Pilih 'Semua Reguler' untuk tampilan rapi dan seimbang seperti Canva Gamkonora._"
     )
     bot.send_message(TELEGRAM_CHAT_ID, txt, parse_mode="Markdown", reply_markup=markup)
 
@@ -1153,8 +1165,7 @@ def handle_user_cover_photo(message):
     dl = bot.download_file(f_info.file_path)
     with open(state["cover_source_img"], "wb") as f:
         f.write(dl)
-    
-    # Ambil sumber dari caption foto yang dikirimkan user
+
     if message.caption and message.caption.strip():
         raw_cap = message.caption.strip()
         clean_cap = re.sub(r'^(?:foto|photo)\s*:\s*', '', raw_cap, flags=re.IGNORECASE).strip()
@@ -1165,7 +1176,7 @@ def handle_user_cover_photo(message):
     state["is_ai_art"] = False
     state["waiting_for_cover_upload"] = False
     new_cov = create_converter_cover()
-    
+
     src_info = f" (Sumber: `{state['custom_cover_source']}`)" if state["custom_cover_source"] else ""
     bot.send_message(TELEGRAM_CHAT_ID, f"✅ *Foto cover berhasil dipasang!*{src_info}", parse_mode="Markdown")
     send_cover_preview(new_cov)
@@ -1179,15 +1190,14 @@ def handle_user_video(message):
     dl = bot.download_file(f_info.file_path)
     with open(state["uploaded_video_path"], "wb") as f:
         f.write(dl)
-    
-    # Sumber video unggahan
+
     sumber_val = state["converter_data"].get("sumber") or state["converter_data"].get("sumber_media") or "Media"
     s_raw = message.caption.strip() if message.caption else sumber_val
     if not s_raw.lower().startswith(("video:", "foto:")):
         s_raw = f"Video: {s_raw}"
     state["custom_source_text"] = s_raw
     state["waiting_for_video_upload"] = False
-    
+
     mood = state["converter_data"].get("mood_musik", "chill").upper()
     markup = InlineKeyboardMarkup()
     markup.row(
@@ -1201,12 +1211,12 @@ def send_final_package(mp4_path):
     judul_unicode = to_unicode_bold(state["selected_title"].strip())
     with open(state["final_cover_img"], "rb") as cov:
         bot.send_photo(TELEGRAM_CHAT_ID, cov, caption="✅ *COVER FINAL*", parse_mode="Markdown")
-    
+
     sumber_val = state["converter_data"].get("sumber") or state["converter_data"].get("sumber_media") or "Media"
     v_cap = f"{judul_unicode}\n\nSumber: {sumber_val}"
     with open(mp4_path, "rb") as vid:
         bot.send_video(TELEGRAM_CHAT_ID, vid, caption=v_cap)
-    
+
     bot.send_message(TELEGRAM_CHAT_ID, f"📝 *CAPTION SIAP POSTING (TINGGAL SALIN):*\n\n{full_text}")
     bot.send_message(TELEGRAM_CHAT_ID, "🎉 *Selesai!* Seluruh paket berita CampersMagz sudah siap diposting.")
     bot.stop_polling()
