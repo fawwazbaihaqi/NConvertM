@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import random
 import base64
 import urllib.parse
 import subprocess
@@ -472,7 +473,7 @@ def build_full_article_text():
     )
 
 # ==========================================
-# 5. DESAIN COVER PERSIS GAMKONORA (GREEDY FILL BARIS 1 & LOGO PROPORSI ASLI)
+# 5. DESAIN COVER PERSIS KOORDINAT GAMKONORA (9925.png)
 # ==========================================
 def draw_cover_tent_logo(canvas, last_char_right, last_char_top):
     tenda_file = find_asset_file(
@@ -502,7 +503,7 @@ def draw_cover_tent_logo(canvas, last_char_right, last_char_top):
     draw.polygon([(tx + w // 2, ty), (tx, ty + h), (tx + w, ty + h)], outline=(130, 134, 138), width=2)
 
 def draw_top_dark_logo_exact(canvas):
-    tx, ty, tw, th = 485, 108, 110, 110
+    tx, ty, tw, th = 485, 115, 110, 110
     dark_grey = (82, 86, 89, 255)
     logo_file = find_asset_file(["logo_top_dark.png"], ["top dark", "cover atas", "logo atas"])
     if logo_file:
@@ -525,7 +526,6 @@ def draw_top_dark_logo_exact(canvas):
     draw.ellipse([tx + 20, ty + 8, tx + tw - 6, ty + th - 18], fill=(255, 255, 255, 255))
 
 def draw_cover_bottom_logo(canvas):
-    """Merender logo CampersMagz kiri bawah dengan aspek rasio asli tanpa distorsi/tertarik"""
     logo_file = find_asset_file(["Logo_cover_kiri_bawah.png", "logo_cover_kiri_bawah.png"], ["kiri bawah", "bottom"])
     if logo_file:
         try:
@@ -550,17 +550,17 @@ def draw_cover_bottom_logo(canvas):
     f_b = get_nunito_font(28, weight="bold")
     draw.text((87, 1818), "CAMPERSMAGZ", font=f_b, fill=(255, 255, 255, 255))
 
-def format_cover_headline_gamkonora(judul, max_w=870):
+def format_cover_headline_gamkonora(judul, max_w=885):
     """
-    Menata sub-judul agar baris pertama terisi maksimal selebar format gambar (870px):
-    - Rentang ukuran font 48px s/d 34px (jelas terbaca, proporsional, di bawah ukuran judul 92px).
-    - Baris pertama diisi kata sebanyak mungkin (greedy fill) sehingga kata seperti 'hilang di' masuk baris pertama.
+    Menata sub-judul agar baris pertama maksimal selebar gambar (885px):
+    - Rentang ukuran font 44px s/d 36px (persis proporsi Gamkonora 9925.png).
+    - Baris pertama diisi penuh (greedy fill) sebelum turun ke baris kedua.
     """
     words = judul.split()
     if not words:
-        return [], 44
+        return [], 42
 
-    for f_size in range(48, 33, -2):
+    for f_size in range(44, 35, -2):
         font = get_nunito_font(f_size, weight="regular")
         w_full = font.getbbox(" ".join(words))[2] - font.getbbox(" ".join(words))[0]
 
@@ -575,20 +575,20 @@ def format_cover_headline_gamkonora(judul, max_w=870):
             if w1 <= max_w and w2 <= max_w:
                 return [l1, l2], f_size
 
-    font = get_nunito_font(32, weight="regular")
+    font = get_nunito_font(34, weight="regular")
     for i in range(len(words) - 1, 0, -1):
         l1 = " ".join(words[:i])
         l2 = " ".join(words[i:])
         if (font.getbbox(l1)[2] - font.getbbox(l1)[0]) <= max_w and (font.getbbox(l2)[2] - font.getbbox(l2)[0]) <= max_w:
-            return [l1, l2], 32
+            return [l1, l2], 34
 
     mid = (len(words) + 1) // 2
-    return [" ".join(words[:mid]), " ".join(words[mid:])], 32
+    return [" ".join(words[:mid]), " ".join(words[mid:])], 34
 
 def draw_cover_headline_selective_bold(draw, start_x, start_y, lines, f_size, bold_phrase, text_dark):
     font_reg = get_nunito_font(f_size, weight="regular")
     font_bld = get_nunito_font(f_size, weight="bold")
-    line_spacing = int(f_size * 1.30)
+    line_spacing = int(f_size * 1.32)
 
     bold_tokens = set(re.findall(r'\w+', bold_phrase.lower())) if bold_phrase else set()
 
@@ -611,36 +611,37 @@ def draw_cover_headline_selective_bold(draw, start_x, start_y, lines, f_size, bo
     return y_pos
 
 def create_converter_cover():
+    """Merender Cover dengan Koordinat Vertikal (Y-Axis) Persis Gambar Acuan Gamkonora (9925.png)"""
     W, H = 1080, 1920
     canvas = Image.new("RGBA", (W, H), (255, 255, 255, 255))
     draw = ImageDraw.Draw(canvas)
 
-    text_dark = (84, 88, 92, 255)
-    pill_bg = (220, 220, 220, 255)
+    text_dark = (88, 92, 96, 255)
+    pill_bg = (224, 224, 224, 255)
     footer_grey_hex = "#616264"
 
     # 1. Logo Atas
     draw_top_dark_logo_exact(canvas)
 
-    # 2. Kata Kunci Nama Gunung (92px Bold)
+    # 2. Kata Kunci Nama Gunung (Koordinat Y=468 persis Gamkonora 9925.png)
     raw_kw = state["converter_data"].get("kata_kunci_utama", "Info Gunung")
     kata_kunci = clean_mountain_name(raw_kw)
 
     if not state["is_ai_art"]:
         kw_len = len(kata_kunci)
-        kw_size = 92 if kw_len <= 10 else (80 if kw_len <= 14 else 68)
+        kw_size = 96 if kw_len <= 10 else (82 if kw_len <= 14 else 68)
         font_big = get_nunito_font(kw_size, weight="bold")
 
-        start_x, start_y = 105, 365
+        start_x, start_y = 92, 468
         bbox_kw = font_big.getbbox(kata_kunci)
         kw_h = bbox_kw[3] - bbox_kw[1]
 
-        # Highlight Abu-Abu di Belakang Teks
-        pill_x1 = start_x - 4
-        pill_x2 = start_x + int(font_big.getlength(kata_kunci)) + 8
-        pill_y1 = start_y + bbox_kw[1] + int(kw_h * 0.50)
-        pill_y2 = start_y + bbox_kw[3] + 12
-        draw.rounded_rectangle([pill_x1, pill_y1, pill_x2, pill_y2], radius=6, fill=pill_bg)
+        # Highlight Abu-Abu di Belakang Teks (Y=528..598, radius=16 persis Gamkonora)
+        pill_x1 = start_x - 8
+        pill_x2 = start_x + int(font_big.getlength(kata_kunci)) + 14
+        pill_y1 = start_y + bbox_kw[1] + int(kw_h * 0.46)
+        pill_y2 = start_y + bbox_kw[3] + 18
+        draw.rounded_rectangle([pill_x1, pill_y1, pill_x2, pill_y2], radius=16, fill=pill_bg)
 
         # Teks Nama Gunung
         draw.text((start_x, start_y), kata_kunci, font=font_big, fill=text_dark)
@@ -654,18 +655,17 @@ def create_converter_cover():
         last_char_top = start_y + char_box[1]
         draw_cover_tent_logo(canvas, last_char_right, last_char_top)
 
-        # 3. Sub-Judul Berita (Maksimal Baris 1 Selebar Gambar)
+        # 3. Sub-Judul Berita (Dimulai di Y=665 persis Gamkonora 9925.png)
         judul = state["selected_title"].strip()
-        lines, f_sub_size = format_cover_headline_gamkonora(judul, max_w=870)
-        y_sub = pill_y2 + 32
+        lines, f_sub_size = format_cover_headline_gamkonora(judul, max_w=885)
+        y_sub = 665
         bold_phrase = state.get("bold_phrase", "")
-        y_end_text = draw_cover_headline_selective_bold(draw, 105, y_sub, lines[:2], f_sub_size, bold_phrase, text_dark)
+        draw_cover_headline_selective_bold(draw, 92, y_sub, lines[:2], f_sub_size, bold_phrase, text_dark)
 
-        # 4. Foto Berita Asli (Posisi Adaptif di Bawah Teks)
-        y_img = max(660, y_end_text + 38)
+        # 4. Foto Berita Asli (Tepat di Y=885, ukuran 870x480, radius=34 persis Gamkonora 9925.png)
         if os.path.exists(state["cover_source_img"]):
             src_img = Image.open(state["cover_source_img"]).convert("RGBA")
-            box_w, box_h = 870, 520
+            box_w, box_h = 870, 480
             img_r = src_img.width / src_img.height
             box_r = box_w / box_h
             if img_r > box_r:
@@ -678,20 +678,20 @@ def create_converter_cover():
 
             mask = Image.new("L", (box_w, box_h), 0)
             m_draw = ImageDraw.Draw(mask)
-            m_draw.rounded_rectangle([0, 0, box_w, box_h], radius=32, fill=255)
-            canvas.paste(src_img, (105, y_img), mask)
+            m_draw.rounded_rectangle([0, 0, box_w, box_h], radius=34, fill=255)
+            canvas.paste(src_img, (105, 885), mask)
 
     else:
         if os.path.exists(state["cover_source_img"]):
             art_img = Image.open(state["cover_source_img"]).convert("RGBA")
             art_img = art_img.resize((1080, 1080), Image.Resampling.LANCZOS)
-            canvas.paste(art_img, (0, 700))
+            canvas.paste(art_img, (0, 720))
 
         judul = state["selected_title"].strip()
-        lines, f_sub_size = format_cover_headline_gamkonora(judul, max_w=870)
-        y_txt = 500
+        lines, f_sub_size = format_cover_headline_gamkonora(judul, max_w=885)
+        y_txt = 540
         bold_phrase = state.get("bold_phrase", "")
-        draw_cover_headline_selective_bold(draw, 105, y_txt, lines[:2], f_sub_size, bold_phrase, text_dark)
+        draw_cover_headline_selective_bold(draw, 92, y_txt, lines[:2], f_sub_size, bold_phrase, text_dark)
 
     # 5. Kapsul Abu-Abu Bawah & Logo CampersMagz
     draw.rounded_rectangle([60, 1805, 1020, 1862], radius=28, fill=footer_grey_hex)
@@ -839,40 +839,98 @@ def create_video_overlays(custom_source=None):
     return path_logos, path_title
 
 # ==========================================
-# 7. AUDIO INSTRUMENTAL ATMOSFERIK CAMPERSMAGZ
+# 7. SISTEM LAGU INSTRUMENTAL ALA CAPCUT (REAL MUSIC + LOUDNORM)
 # ==========================================
+CAPCUT_MUSIC_LIBRARY = {
+    "urgent": [
+        "https://assets.mixkit.co/music/preview/mixkit-cinematic-mystery-trailer-278.mp3",
+        "https://assets.mixkit.co/music/preview/mixkit-Suspense-mystery-bass-685.mp3",
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
+    ],
+    "somber": [
+        "https://assets.mixkit.co/music/preview/mixkit-sad-piano-melody-282.mp3",
+        "https://assets.mixkit.co/music/preview/mixkit-alone-in-the-dark-26.mp3",
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3"
+    ],
+    "upbeat": [
+        "https://assets.mixkit.co/music/preview/mixkit-driving-ambition-32.mp3",
+        "https://assets.mixkit.co/music/preview/mixkit-sun-and-his-daughter-580.mp3",
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3"
+    ],
+    "chill": [
+        "https://assets.mixkit.co/music/preview/mixkit-valley-sunset-127.mp3",
+        "https://assets.mixkit.co/music/preview/mixkit-serene-view-443.mp3",
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3"
+    ]
+}
+
 def prepare_mood_audio(mood="chill", duration=6):
+    """
+    Menyiapkan musik latar instrumen asli bergaya CapCut:
+    1. Cek apakah ada file MP3 lokal di repo (bgm_urgent.mp3, dll).
+    2. Jika tidak ada, unduh instrumen musik asli dari CDN sesuai mood secara acak (tidak monoton).
+    3. Potong bagian klimaks lagu & terapkan EBU R128 Loudness Normalization (-14 LUFS) agar KENCANG & JERNIH.
+    """
     mood = str(mood).lower().strip()
     if mood not in ["urgent", "somber", "upbeat", "chill"]:
         mood = "chill"
 
-    custom_f = f"bgm_{mood}.mp3"
-    if os.path.exists(custom_f):
-        return custom_f
+    raw_audio = f"raw_{mood}.mp3"
+    processed_audio = f"ready_{mood}.mp3"
+
+    local_candidates = [f for f in os.listdir(".") if f.lower().startswith(f"bgm_{mood}") and f.lower().endswith(".mp3")]
+    if local_candidates:
+        raw_audio = random.choice(local_candidates)
     elif os.path.exists("bgm.mp3"):
-        return "bgm.mp3"
-
-    out_aud = f"synth_{mood}.mp3"
-    if mood == "urgent":
-        expr = "0.35*sin(2*PI*55*t)*(1+0.4*sin(2*PI*1.8*t))+0.2*sin(2*PI*82.41*t)+0.15*sin(2*PI*110*t)"
-        filter_chain = "lowpass=f=750,volume=1.4"
-    elif mood == "somber":
-        expr = "0.3*sin(2*PI*73.42*t)+0.2*sin(2*PI*87.31*t)+0.2*sin(2*PI*110*t)"
-        filter_chain = "lowpass=f=650,volume=1.3"
-    elif mood == "upbeat":
-        expr = "0.25*sin(2*PI*130.81*t)+0.2*sin(2*PI*164.81*t)+0.2*sin(2*PI*196.00*t)+0.1*sin(2*PI*261.63*t)"
-        filter_chain = "bandpass=f=1200:w=1200,volume=1.2"
+        raw_audio = "bgm.mp3"
     else:
-        expr = "0.25*sin(2*PI*110*t)+0.2*sin(2*PI*137.5*t)+0.18*sin(2*PI*165*t)+0.12*sin(2*PI*220*t)"
-        filter_chain = "lowpass=f=1100,volume=1.3"
+        urls = CAPCUT_MUSIC_LIBRARY.get(mood, CAPCUT_MUSIC_LIBRARY["chill"])
+        random.shuffle(urls)
+        downloaded = False
+        headers = {"User-Agent": "Mozilla/5.0"}
+        for u in urls:
+            try:
+                r = requests.get(u, headers=headers, timeout=15)
+                if r.status_code == 200 and len(r.content) > 30000:
+                    with open(raw_audio, "wb") as f:
+                        f.write(r.content)
+                    downloaded = True
+                    print(f"Berhasil mengunduh musik instrumental ({mood}): {u}")
+                    break
+            except Exception as e:
+                print(f"Skip musik URL {u}: {e}")
 
-    cmd = [
-        "ffmpeg", "-y", "-f", "lavfi",
-        "-i", f"aevalsrc={expr}:s=44100:d={duration}",
-        "-af", filter_chain, out_aud
+        if not downloaded:
+            if mood == "urgent":
+                expr = "0.5*sin(2*PI*110*t)*exp(-4*mod(t,0.5))+0.4*sin(2*PI*220*t)*exp(-6*mod(t+0.25,0.5))"
+            elif mood == "somber":
+                expr = "0.5*sin(2*PI*220*t)*exp(-1.5*mod(t,2))+0.4*sin(2*PI*261.63*t)*exp(-1.5*mod(t,2))"
+            elif mood == "upbeat":
+                expr = "0.5*sin(2*PI*261.63*t)*exp(-5*mod(t,0.4))+0.4*sin(2*PI*329.63*t)*exp(-5*mod(t+0.2,0.4))"
+            else:
+                expr = "0.5*sin(2*PI*196*t)*exp(-2.5*mod(t,1))+0.4*sin(2*PI*246.94*t)*exp(-2.5*mod(t+0.5,1))"
+
+            subprocess.run([
+                "ffmpeg", "-y", "-f", "lavfi",
+                "-i", f"aevalsrc={expr}:s=44100:d={duration}",
+                "-af", "volume=2.8", processed_audio
+            ], check=True)
+            return processed_audio
+
+    cmd_master = [
+        "ffmpeg", "-y", "-ss", "8", "-t", str(duration), "-i", raw_audio,
+        "-af", "loudnorm=I=-14:TP=-1.0:LRA=11,volume=1.35",
+        processed_audio
     ]
-    subprocess.run(cmd, check=True)
-    return out_aud
+    res = subprocess.run(cmd_master)
+    if res.returncode != 0 or not os.path.exists(processed_audio):
+        subprocess.run([
+            "ffmpeg", "-y", "-ss", "0", "-t", str(duration), "-i", raw_audio,
+            "-af", "loudnorm=I=-14:TP=-1.0:LRA=11,volume=1.35",
+            processed_audio
+        ], check=True)
+
+    return processed_audio
 
 def render_final_video(mode="pan_image", add_instrumental=True):
     c_src = state["custom_source_text"] if mode == "user_video" else None
@@ -897,7 +955,7 @@ def render_final_video(mode="pan_image", add_instrumental=True):
             "-loop", "1", "-t", "6", "-i", overlay_title
         ]
         if has_bgm:
-            fc = vf + ";[3:a]afade=t=out:st=4.5:d=1.5[outa]"
+            fc = vf + ";[3:a]afade=t=in:st=0:d=0.4,afade=t=out:st=4.6:d=1.4[outa]"
             cmd += ["-i", bgm_p, "-filter_complex", fc, "-map", "[outv]", "-map", "[outa]"]
         else:
             cmd += ["-filter_complex", vf, "-map", "[outv]"]
@@ -924,13 +982,18 @@ def render_final_video(mode="pan_image", add_instrumental=True):
             bgm_act = prepare_mood_audio(mood=mood_b, duration=6)
             cmd += ["-i", bgm_act]
             if vid_has_a:
-                fc = f"{vf};[0:a]afade=t=out:st=4.5:d=1.5[orig_a];[3:a]afade=t=out:st=4.5:d=1.5[bgm];[orig_a][bgm]amix=inputs=2:duration=first[outa]"
+                fc = (
+                    f"{vf};"
+                    "[0:a]volume=0.7,afade=t=out:st=4.6:d=1.4[orig_a];"
+                    "[3:a]volume=1.0,afade=t=in:st=0:d=0.4,afade=t=out:st=4.6:d=1.4[bgm];"
+                    "[orig_a][bgm]amix=inputs=2:duration=first:dropout_transition=0,volume=1.6[outa]"
+                )
             else:
-                fc = f"{vf};[3:a]afade=t=out:st=4.5:d=1.5[outa]"
+                fc = f"{vf};[3:a]afade=t=in:st=0:d=0.4,afade=t=out:st=4.6:d=1.4[outa]"
             cmd += ["-filter_complex", fc, "-map", "[outv]", "-map", "[outa]"]
         else:
             if vid_has_a:
-                fc = f"{vf};[0:a]afade=t=out:st=4.5:d=1.5[outa]"
+                fc = f"{vf};[0:a]loudnorm=I=-14:TP=-1.0:LRA=11,afade=t=out:st=4.6:d=1.4[outa]"
                 cmd += ["-filter_complex", fc, "-map", "[outv]", "-map", "[outa]"]
             else:
                 cmd += ["-filter_complex", vf, "-map", "[outv]"]
@@ -970,7 +1033,7 @@ def send_cover_preview(cover_path):
     markup.add(InlineKeyboardButton("🖼️ Pilih Gambar Ini Sebagai Cover", callback_data="cover_keep"))
     markup.add(InlineKeyboardButton("🍌 Generate Cover dengan Nano Banana", callback_data="cover_nano"))
     markup.add(InlineKeyboardButton("📤 Upload Foto Cover Sendiri", callback_data="cover_upload"))
-    cap_txt = f"📌 *Preview Cover (Standar Canva Gamkonora)*\n🎵 Suasana Musik: `{mood_t}`"
+    cap_txt = f"📌 *Preview Cover (Koordinat Persis Gamkonora)*\n🎵 Musik Instrumental: `{mood_t}`"
     with open(cover_path, "rb") as ph:
         bot.send_photo(TELEGRAM_CHAT_ID, ph, caption=cap_txt, parse_mode="Markdown", reply_markup=markup)
 
@@ -996,7 +1059,7 @@ def send_bold_options():
     txt = (
         f"🎨 *PILIH GAYA PENEGASAN (BOLD) SUB-JUDUL COVER:*\n\n"
         f"Judul Terpilih:\n*{state['selected_title']}*\n\n"
-        f"💡 _Tips: Pilih 'Semua Reguler' untuk tampilan rapi dan seimbang seperti Canva Gamkonora._"
+        f"💡 _Tips: Pilih 'Semua Reguler' untuk tampilan identik dengan Canva Gamkonora._"
     )
     bot.send_message(TELEGRAM_CHAT_ID, txt, parse_mode="Markdown", reply_markup=markup)
 
@@ -1048,8 +1111,7 @@ def handle_callbacks(call):
             bot.send_message(
                 TELEGRAM_CHAT_ID,
                 "📤 *Silakan kirim/upload FOTO untuk cover sekarang.*\n\n"
-                "💡 *PENTING:* Tuliskan sumber foto pada kolom *Caption* saat mengirim foto (contoh: `instagram/@pendaki_lawu` atau `kompas.com`).\n"
-                "Jika dikirim tanpa caption, sumber akan tetap menggunakan nama media berita asal.",
+                "💡 *PENTING:* Tuliskan sumber foto pada kolom *Caption* saat mengirim foto (contoh: `instagram/@pendaki_lawu` atau `kompas.com`).",
                 parse_mode="Markdown"
             )
         elif data == "cover_keep":
@@ -1088,7 +1150,7 @@ def handle_callbacks(call):
             send_caption_review()
 
         elif data == "bold_line2":
-            lines, _ = format_cover_headline_gamkonora(state["selected_title"], max_w=870)
+            lines, _ = format_cover_headline_gamkonora(state["selected_title"], max_w=885)
             state["bold_phrase"] = lines[1] if len(lines) > 1 else lines[0]
             bot.answer_callback_query(call.id, "Baris 2 ditebalkan!")
             new_cov = create_converter_cover()
@@ -1123,7 +1185,7 @@ def handle_callbacks(call):
         elif data == "vid_no_upload":
             bot.answer_callback_query(call.id, "Merender video 6 detik...")
             mood = state["converter_data"].get("mood_musik", "chill").upper()
-            bot.send_message(TELEGRAM_CHAT_ID, f"⚙️ Merender video Pan 6 detik + Audio ({mood}) + Fade Out...")
+            bot.send_message(TELEGRAM_CHAT_ID, f"⚙️ Merender video Pan 6 detik + Musik Instrumental ({mood}) Kencang...")
             mp4 = render_final_video(mode="pan_image", add_instrumental=True)
             send_final_package(mp4)
 
@@ -1136,7 +1198,7 @@ def handle_callbacks(call):
             add_bgm = (data == "bgm_yes")
             bot.answer_callback_query(call.id, "Mengedit video...")
             mood = state["converter_data"].get("mood_musik", "chill").upper()
-            bot.send_message(TELEGRAM_CHAT_ID, f"⚙️ Mengedit video 6 detik + Musik ({mood}) + Fade In Judul...", parse_mode="Markdown")
+            bot.send_message(TELEGRAM_CHAT_ID, f"⚙️ Mengedit video 6 detik + Musik Instrumental ({mood}) + Fade In Judul...", parse_mode="Markdown")
             mp4 = render_final_video(mode="user_video", add_instrumental=add_bgm)
             send_final_package(mp4)
 
