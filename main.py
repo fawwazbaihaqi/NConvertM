@@ -472,7 +472,7 @@ def build_full_article_text():
     )
 
 # ==========================================
-# 5. DESAIN COVER PERSIS GAMKONORA (DILENGKAPI AUTO-SCALE SUB-JUDUL)
+# 5. DESAIN COVER PERSIS GAMKONORA (GREEDY FILL BARIS 1 & LOGO PROPORSI ASLI)
 # ==========================================
 def draw_cover_tent_logo(canvas, last_char_right, last_char_top):
     tenda_file = find_asset_file(
@@ -525,7 +525,7 @@ def draw_top_dark_logo_exact(canvas):
     draw.ellipse([tx + 20, ty + 8, tx + tw - 6, ty + th - 18], fill=(255, 255, 255, 255))
 
 def draw_cover_bottom_logo(canvas):
-    tx, ty, tw, th = 87, 1817, 194, 30
+    """Merender logo CampersMagz kiri bawah dengan aspek rasio asli tanpa distorsi/tertarik"""
     logo_file = find_asset_file(["Logo_cover_kiri_bawah.png", "logo_cover_kiri_bawah.png"], ["kiri bawah", "bottom"])
     if logo_file:
         try:
@@ -533,52 +533,59 @@ def draw_cover_bottom_logo(canvas):
             bbox = l_bot.getbbox()
             if bbox:
                 l_bot = l_bot.crop(bbox)
-            l_bot = l_bot.resize((235, 42), Image.Resampling.LANCZOS)
-            canvas.alpha_composite(l_bot, (tx, ty))
+
+            # Pertahankan rasio asli logo: scale proporsional berdasarkan tinggi target 28px
+            target_h = 28
+            scale = target_h / l_bot.height
+            target_w = int(l_bot.width * scale)
+            l_bot = l_bot.resize((target_w, target_h), Image.Resampling.LANCZOS)
+
+            pos_x = 87
+            pos_y = 1805 + (57 - target_h) // 2
+            canvas.alpha_composite(l_bot, (pos_x, pos_y))
             return
         except Exception as e:
             print(f"Logo bawah cover error: {e}")
 
     draw = ImageDraw.Draw(canvas)
     f_b = get_nunito_font(28, weight="bold")
-    draw.text((tx, ty - 2), "CAMPERSMAGZ", font=f_b, fill=(255, 255, 255, 255))
+    draw.text((87, 1818), "CAMPERSMAGZ", font=f_b, fill=(255, 255, 255, 255))
 
 def format_cover_headline_gamkonora(judul, max_w=870):
     """
-    Menata sub-judul agar terisi penuh secara proporsional:
-    - Ukuran font adaptif dari 52px hingga 34px (tidak kecil 30px lagi, tapi tidak sebesar judul 92px).
-    - Membagi secara otomatis menjadi maksimal 2 baris seimbang yang memenuhi lebar foto (870px).
+    Menata sub-judul agar baris pertama terisi maksimal selebar format gambar (870px):
+    - Rentang ukuran font 48px s/d 34px (jelas terbaca, proporsional, di bawah ukuran judul 92px).
+    - Baris pertama diisi kata sebanyak mungkin (greedy fill) sehingga kata seperti 'hilang di' masuk baris pertama.
     """
     words = judul.split()
     if not words:
-        return [], 48
+        return [], 44
 
-    for f_size in range(52, 33, -2):
+    for f_size in range(48, 33, -2):
         font = get_nunito_font(f_size, weight="regular")
         w_full = font.getbbox(" ".join(words))[2] - font.getbbox(" ".join(words))[0]
 
-        # Jika judul pendek (misal 2-3 kata) dan muat proporsional 1 baris
+        # Jika seluruh kalimat muat dalam 1 baris
         if len(words) <= 3 and w_full <= max_w:
             return [" ".join(words)], f_size
 
-        # Bagi menjadi 2 baris seimbang agar penuh kiri-kanan
-        best_split = None
-        min_diff = float("inf")
-        for i in range(1, len(words)):
+        # Greedy fill: uji dari jumlah kata baris 1 terbanyak yang masih muat <= max_w
+        for i in range(len(words) - 1, 0, -1):
             l1 = " ".join(words[:i])
             l2 = " ".join(words[i:])
             w1 = font.getbbox(l1)[2] - font.getbbox(l1)[0]
             w2 = font.getbbox(l2)[2] - font.getbbox(l2)[0]
             if w1 <= max_w and w2 <= max_w:
-                diff = abs(w1 - w2)
-                if diff < min_diff:
-                    min_diff = diff
-                    best_split = (l1, l2)
+                return [l1, l2], f_size
 
-        if best_split:
-            return [best_split[0], best_split[1]], f_size
-
+    # Fallback ukuran 32px
     font = get_nunito_font(32, weight="regular")
+    for i in range(len(words) - 1, 0, -1):
+        l1 = " ".join(words[:i])
+        l2 = " ".join(words[i:])
+        if (font.getbbox(l1)[2] - font.getbbox(l1)[0]) <= max_w and (font.getbbox(l2)[2] - font.getbbox(l2)[0]) <= max_w:
+            return [l1, l2], 32
+
     mid = (len(words) + 1) // 2
     return [" ".join(words[:mid]), " ".join(words[mid:])], 32
 
@@ -619,7 +626,7 @@ def create_converter_cover():
     # 1. Logo Atas
     draw_top_dark_logo_exact(canvas)
 
-    # 2. Kata Kunci Nama Gunung (Contoh: "Semeru" 92px Bold)
+    # 2. Kata Kunci Nama Gunung (92px Bold)
     raw_kw = state["converter_data"].get("kata_kunci_utama", "Info Gunung")
     kata_kunci = clean_mountain_name(raw_kw)
 
@@ -632,7 +639,7 @@ def create_converter_cover():
         bbox_kw = font_big.getbbox(kata_kunci)
         kw_h = bbox_kw[3] - bbox_kw[1]
 
-        # Highlight Abu-Abu di Belakang
+        # Highlight Abu-Abu di Belakang Teks
         pill_x1 = start_x - 4
         pill_x2 = start_x + int(font_big.getlength(kata_kunci)) + 8
         pill_y1 = start_y + bbox_kw[1] + int(kw_h * 0.50)
@@ -651,15 +658,15 @@ def create_converter_cover():
         last_char_top = start_y + char_box[1]
         draw_cover_tent_logo(canvas, last_char_right, last_char_top)
 
-        # 3. Sub-Judul Berita (Otomatis Proporsional Penuh Kiri-Kanan)
+        # 3. Sub-Judul Berita (Maksimal Baris 1 Selebar Gambar)
         judul = state["selected_title"].strip()
         lines, f_sub_size = format_cover_headline_gamkonora(judul, max_w=870)
         y_sub = pill_y2 + 32
         bold_phrase = state.get("bold_phrase", "")
         y_end_text = draw_cover_headline_selective_bold(draw, 105, y_sub, lines[:2], f_sub_size, bold_phrase, text_dark)
 
-        # 4. Foto Berita Asli (Posisi Adaptif Menyesuaikan Tinggi Teks)
-        y_img = max(650, y_end_text + 38)
+        # 4. Foto Berita Asli (Posisi Adaptif di Bawah Teks)
+        y_img = max(660, y_end_text + 38)
         if os.path.exists(state["cover_source_img"]):
             src_img = Image.open(state["cover_source_img"]).convert("RGBA")
             box_w, box_h = 870, 520
@@ -777,7 +784,6 @@ def create_video_overlays(custom_source=None):
         except Exception as e:
             print(f"Error load Logo_Atas_Video: {e}")
 
-    # Sumber Video: Mengikuti sumber cover / sumber video unggahan
     font_system = get_video_system_font(16)
     if custom_source:
         sumber_lbl = custom_source
@@ -802,8 +808,14 @@ def create_video_overlays(custom_source=None):
             bbox = l_bot.getbbox()
             if bbox:
                 l_bot = l_bot.crop(bbox)
-            l_bot = l_bot.resize((235, 42), Image.Resampling.LANCZOS)
-            canvas_logos.alpha_composite(l_bot, (421, 1799))
+
+            target_h = 42
+            scale = target_h / l_bot.height
+            target_w = int(l_bot.width * scale)
+            l_bot = l_bot.resize((target_w, target_h), Image.Resampling.LANCZOS)
+
+            pos_x = (1080 - target_w) // 2
+            canvas_logos.alpha_composite(l_bot, (pos_x, 1799))
         except Exception as e:
             print(f"Error load Logo_bawah_video: {e}")
 
