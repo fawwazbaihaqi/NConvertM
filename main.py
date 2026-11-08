@@ -534,7 +534,6 @@ def draw_cover_bottom_logo(canvas):
             if bbox:
                 l_bot = l_bot.crop(bbox)
 
-            # Pertahankan rasio asli logo: scale proporsional berdasarkan tinggi target 28px
             target_h = 28
             scale = target_h / l_bot.height
             target_w = int(l_bot.width * scale)
@@ -565,11 +564,9 @@ def format_cover_headline_gamkonora(judul, max_w=870):
         font = get_nunito_font(f_size, weight="regular")
         w_full = font.getbbox(" ".join(words))[2] - font.getbbox(" ".join(words))[0]
 
-        # Jika seluruh kalimat muat dalam 1 baris
         if len(words) <= 3 and w_full <= max_w:
             return [" ".join(words)], f_size
 
-        # Greedy fill: uji dari jumlah kata baris 1 terbanyak yang masih muat <= max_w
         for i in range(len(words) - 1, 0, -1):
             l1 = " ".join(words[:i])
             l2 = " ".join(words[i:])
@@ -578,7 +575,6 @@ def format_cover_headline_gamkonora(judul, max_w=870):
             if w1 <= max_w and w2 <= max_w:
                 return [l1, l2], f_size
 
-    # Fallback ukuran 32px
     font = get_nunito_font(32, weight="regular")
     for i in range(len(words) - 1, 0, -1):
         l1 = " ".join(words[:i])
