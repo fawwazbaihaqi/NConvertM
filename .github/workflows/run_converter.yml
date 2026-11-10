@@ -1,10 +1,9 @@
-name: CampersMagz News Converter
+name: NConvertM
 
 on:
   schedule:
-    # Berjalan otomatis setiap 2 jam sekali
     - cron: '0 */2 * * *'
-  workflow_dispatch: # Tombol manual "Run workflow" di tab Actions
+  workflow_dispatch:
 
 jobs:
   run-converter:
@@ -28,7 +27,7 @@ jobs:
       - name: Install Dependencies
         run: |
           pip install --upgrade pip
-          pip install requests feedparser Pillow pyTelegramBotAPI beautifulsoup4
+          pip install requests feedparser Pillow pyTelegramBotAPI beautifulsoup4 rembg onnxruntime
 
       - name: Run Python Script
         env:
