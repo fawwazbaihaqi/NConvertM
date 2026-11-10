@@ -54,7 +54,7 @@ def to_unicode_bold(text: str) -> str:
         'A':'𝐀','B':'𝐁','C':'𝐂','D':'𝐃','E':'𝐄','F':'𝐅','G':'𝐆','H':'𝐇','I':'𝐈','J':'𝐉','K':'𝐊','L':'𝐋','M':'𝐌',
         'N':'𝐍','O':'𝐎','P':'𝐏','Q':'𝐐','R':'𝐑','S':'𝐒','T':'𝐓','U':'𝐔','V':'𝐕','W':'𝐖','X':'𝐗','Y':'𝐘','Z':'𝐙',
         'a':'𝐚','b':'𝐛','c':'𝐜','d':'𝐝','e':'𝐞','f':'𝐟','g':'𝐠','h':'𝐡','i':'𝐢','j':'𝐣','k':'𝐤','l':'𝐥','m':'𝐦',
-        'n':'𝐧','o':'𝐨','p':'𝐩','q':'𝐪','r':'𝐫','s':'𝐬','t':'𝐭','u':'𝐮','v':'𝐯','w':'𝐰','x':'𝐱','y':'𝐲','z':'𝐳',
+        'n':'𝐧','o':'ὀ','p':'𝐩','q':'𝐪','r':'𝐫','s':'𝐬','t':'𝐭','u':'𝐮','v':'𝐯','w':'𝐰','x':'𝐱','y':'𝐲','z':'𝐳',
         '0':'𝟎','1':'𝟏','2':'𝟐','3':'𝟑','4':'𝟒','5':'𝟓','6':'𝟔','7':'𝟕','8':'𝟖','9':'𝟗'
     }
     return ''.join(bold_map.get(char, char) for char in text)
@@ -867,8 +867,8 @@ CAPCUT_MUSIC_LIBRARY = {
 def prepare_mood_audio(mood="chill", duration=6):
     """
     Menyiapkan musik latar instrumen asli bergaya CapCut:
-    1. Cek apakah ada file MP3 lokal di repo (bgm_urgent.mp3, dll).
-    2. Jika tidak ada, unduh instrumen musik asli dari CDN sesuai mood secara acak (tidak monoton).
+    1. Cek file lokal di repo (bgm_urgent.mp3, dll).
+    2. Unduh instrumen musik asli dari CDN sesuai mood secara acak.
     3. Potong bagian klimaks lagu & terapkan EBU R128 Loudness Normalization (-14 LUFS) agar KENCANG & JERNIH.
     """
     mood = str(mood).lower().strip()
@@ -936,7 +936,7 @@ def render_final_video(mode="pan_image", add_instrumental=True):
     c_src = state["custom_source_text"] if mode == "user_video" else None
     overlay_logos, overlay_title = create_video_overlays(custom_source=c_src)
     output_mp4 = "final_campersmagz_reel.mp4"
-    mood_b = state["converter_data"].get("mood_musik", "chill")
+    mood_b = state["converter_data"].get("mood_musik") or "chill"
     bgm_p = prepare_mood_audio(mood=mood_b, duration=6) if add_instrumental else None
     has_bgm = (bgm_p is not None and os.path.exists(bgm_p))
 
@@ -1028,7 +1028,8 @@ def send_news_candidate():
     bot.send_message(TELEGRAM_CHAT_ID, msg, parse_mode="Markdown", reply_markup=markup)
 
 def send_cover_preview(cover_path):
-    mood_t = state["converter_data"].get("mood_musik", "chill").upper()
+    mood_raw = state["converter_data"].get("mood_musik") or "chill"
+    mood_t = str(mood_raw).upper()
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("🖼️ Pilih Gambar Ini Sebagai Cover", callback_data="cover_keep"))
     markup.add(InlineKeyboardButton("🍌 Generate Cover dengan Nano Banana", callback_data="cover_nano"))
@@ -1059,7 +1060,7 @@ def send_bold_options():
     txt = (
         f"🎨 *PILIH GAYA PENEGASAN (BOLD) SUB-JUDUL COVER:*\n\n"
         f"Judul Terpilih:\n*{state['selected_title']}*\n\n"
-        f"💡 _Tips: Pilih 'Semua Reguler' untuk tampilan identik dengan Canva Gamkonora._"
+        f"💡 _Tips: Pilih 'Semua Reguler' untuk tampilan rapi dan seimbang seperti Canva Gamkonora._"
     )
     bot.send_message(TELEGRAM_CHAT_ID, txt, parse_mode="Markdown", reply_markup=markup)
 
@@ -1184,7 +1185,8 @@ def handle_callbacks(call):
 
         elif data == "vid_no_upload":
             bot.answer_callback_query(call.id, "Merender video 6 detik...")
-            mood = state["converter_data"].get("mood_musik", "chill").upper()
+            mood_raw = state["converter_data"].get("mood_musik") or "chill"
+            mood = str(mood_raw).upper()
             bot.send_message(TELEGRAM_CHAT_ID, f"⚙️ Merender video Pan 6 detik + Musik Instrumental ({mood}) Kencang...")
             mp4 = render_final_video(mode="pan_image", add_instrumental=True)
             send_final_package(mp4)
@@ -1197,7 +1199,8 @@ def handle_callbacks(call):
         elif data in ["bgm_yes", "bgm_no"]:
             add_bgm = (data == "bgm_yes")
             bot.answer_callback_query(call.id, "Mengedit video...")
-            mood = state["converter_data"].get("mood_musik", "chill").upper()
+            mood_raw = state["converter_data"].get("mood_musik") or "chill"
+            mood = str(mood_raw).upper()
             bot.send_message(TELEGRAM_CHAT_ID, f"⚙️ Mengedit video 6 detik + Musik Instrumental ({mood}) + Fade In Judul...", parse_mode="Markdown")
             mp4 = render_final_video(mode="user_video", add_instrumental=add_bgm)
             send_final_package(mp4)
@@ -1251,30 +1254,51 @@ def handle_user_cover_photo(message):
     bot.send_message(TELEGRAM_CHAT_ID, f"✅ *Foto cover berhasil dipasang!*{src_info}", parse_mode="Markdown")
     send_cover_preview(new_cov)
 
-@bot.message_handler(content_types=["video"])
+@bot.message_handler(content_types=["video", "document"])
 def handle_user_video(message):
     if not state["waiting_for_video_upload"]:
         return
-    bot.send_message(TELEGRAM_CHAT_ID, "⏳ Mengunduh video Anda (otomatis di-crop 6 detik awal)...")
-    f_info = bot.get_file(message.video.file_id)
-    dl = bot.download_file(f_info.file_path)
-    with open(state["uploaded_video_path"], "wb") as f:
-        f.write(dl)
+    try:
+        vid_obj = message.video or (message.document if message.document and (message.document.mime_type or "").startswith("video/") else None)
+        if not vid_obj:
+            bot.send_message(TELEGRAM_CHAT_ID, "⚠️ Berkas yang Anda kirim bukan file video yang valid. Silakan kirim file video (.mp4).")
+            return
 
-    sumber_val = state["converter_data"].get("sumber") or state["converter_data"].get("sumber_media") or "Media"
-    s_raw = message.caption.strip() if message.caption else sumber_val
-    if not s_raw.lower().startswith(("video:", "foto:")):
-        s_raw = f"Video: {s_raw}"
-    state["custom_source_text"] = s_raw
-    state["waiting_for_video_upload"] = False
+        bot.send_message(TELEGRAM_CHAT_ID, "⏳ Mengunduh video Anda (otomatis di-crop 6 detik awal)...")
+        f_info = bot.get_file(vid_obj.file_id)
+        file_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{f_info.file_path}"
+        r = requests.get(file_url, timeout=60)
+        if r.status_code != 200:
+            raise RuntimeError(f"Gagal mengunduh berkas dari server Telegram (HTTP {r.status_code})")
 
-    mood = state["converter_data"].get("mood_musik", "chill").upper()
-    markup = InlineKeyboardMarkup()
-    markup.row(
-        InlineKeyboardButton(f"🎵 Instrumental ({mood})", callback_data="bgm_yes"),
-        InlineKeyboardButton("🔇 Tanpa Instrumental", callback_data="bgm_no")
-    )
-    bot.send_message(TELEGRAM_CHAT_ID, "🎶 *Pilih opsi audio video:*", parse_mode="Markdown", reply_markup=markup)
+        with open(state["uploaded_video_path"], "wb") as f:
+            f.write(r.content)
+
+        sumber_val = state["converter_data"].get("sumber") or state["converter_data"].get("sumber_media") or "Media"
+        s_raw = message.caption.strip() if message.caption else sumber_val
+        if not s_raw.lower().startswith(("video:", "foto:")):
+            s_raw = f"Video: {s_raw}"
+        state["custom_source_text"] = s_raw
+        state["waiting_for_video_upload"] = False
+
+        mood_raw = state["converter_data"].get("mood_musik") or "chill"
+        mood = str(mood_raw).upper()
+
+        markup = InlineKeyboardMarkup()
+        markup.row(
+            InlineKeyboardButton(f"🎵 Instrumental ({mood})", callback_data="bgm_yes"),
+            InlineKeyboardButton("🔇 Tanpa Instrumental", callback_data="bgm_no")
+        )
+        bot.send_message(TELEGRAM_CHAT_ID, "🎶 *Pilih opsi audio video:*", parse_mode="Markdown", reply_markup=markup)
+
+    except Exception as e:
+        print(f"Error handle_user_video: {e}")
+        bot.send_message(
+            TELEGRAM_CHAT_ID,
+            f"⚠️ *Gagal memproses video unggahan:*\n`{e}`\n\n"
+            "💡 Silakan coba kirim ulang videonya atau pilih opsi *Tidak Upload Video (Pan 6s)*.",
+            parse_mode="Markdown"
+        )
 
 def send_final_package(mp4_path):
     full_text = build_full_article_text()
