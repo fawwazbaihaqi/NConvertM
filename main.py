@@ -1,6 +1,9 @@
 import os
 import json
 import re
+import math
+import wave
+import struct
 import random
 import base64
 import urllib.parse
@@ -9,7 +12,7 @@ from io import BytesIO
 import requests
 import feedparser
 from bs4 import BeautifulSoup
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -62,6 +65,14 @@ state = {
     "custom_cover_source": "",
     "is_ai_art": False
 }
+
+def safe_send_message(chat_id, text, reply_markup=None, parse_mode="Markdown"):
+    """Pengaman pengiriman pesan Telegram agar tidak pernah gagal akibat karakter khusus Markdown"""
+    try:
+        return bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
+    except Exception:
+        clean_text = text.replace("*", "").replace("`", "").replace("_", "")
+        return bot.send_message(chat_id, clean_text, reply_markup=reply_markup)
 
 # ==========================================
 # 2. SISTEM FONT NUNITO TERVERIFIKASI
@@ -386,7 +397,7 @@ def generate_converter_content(article):
 
     mood_desc = (
         "PILIH SALAH SATU: "
-        "'urgent' (Wajib jika kabar orang hilang, kecelakaan, tersesat, evakuasi SAR, kebakaran, atau cuaca ekstrem), "
+        "'urgent' (Wajib jika kabar orang hilang, kecelakaan, tersesat, evakuasi SAR, pelanggaran blacklist, kebakaran, atau cuaca ekstrem), "
         "'somber' (Untuk kabar duka cita, korban jiwa, atau kesedihan mendalam), "
         "'upbeat' (Untuk jalur baru dibuka kembali, kuota ditambah, kabar gembira), "
         "'chill' (Untuk edukasi keselamatan, cuaca normal, keindahan alam, tips regulasi)"
@@ -586,7 +597,6 @@ def draw_cover_bottom_logo(canvas):
     draw.text((87, 1818), "CAMPERSMAGZ", font=f_b, fill=(255, 255, 255, 255))
 
 def draw_footer_bar(canvas, draw):
-    """Menggambar kapsul abu-abu bawah + logo + kredit sumber di lapisan paling atas"""
     footer_grey_hex = "#616264"
     draw.rounded_rectangle([60, 1805, 1020, 1862], radius=28, fill=footer_grey_hex)
     draw_cover_bottom_logo(canvas)
@@ -628,7 +638,6 @@ def format_cover_headline_lines(judul, max_w=885, start_size=44, min_size=34, mo
                 if w1 <= max_w and w2 <= max_w:
                     return [l1, l2], f_size
         else:
-            # Balanced split untuk teks Rata Tengah (Format 3, 4, 5)
             best_split = None
             min_diff = float("inf")
             for i in range(1, len(words)):
@@ -665,13 +674,6 @@ def draw_multiline_text_advanced(
     highlight_phrase="", pill_bg=(224, 224, 224, 255),
     tent_on_line=None
 ):
-    """
-    Mesin pencetak teks serbaguna:
-    - Mendukung align='left' (Format 1 & 2) dan align='center' (Format 3, 4, 5).
-    - Mendukung selektif bold kata tertentu.
-    - Mendukung highlight abu-abu pada kata tertentu di sub-judul (Format 3 Gula Merah).
-    - Mendukung peletakan logo tenda pada ujung baris 1 (Format 4) atau baris 2 (Format 5).
-    """
     W = 1080
     font_reg = get_nunito_font(f_size, weight="regular")
     font_bld = get_nunito_font(f_size, weight="bold")
@@ -690,7 +692,6 @@ def draw_multiline_text_advanced(
         line_w = get_line_total_width(words, font_reg, font_bld, bold_tokens)
         cur_x = start_x if align == "left" else (W - line_w) / 2.0
 
-        # 1. Gambar Highlight Abu-Abu di Belakang Kata Terpilih (Khusus Format 3 Gula Merah)
         if hl_tokens:
             temp_x = cur_x
             hl_x1, hl_x2 = None, None
@@ -712,7 +713,6 @@ def draw_multiline_text_advanced(
                 py2 = y_pos + bbox_sample[3] + 6
                 draw.rounded_rectangle([hl_x1, py1, hl_x2, py2], radius=10, fill=pill_bg)
 
-        # 2. Gambar Kata Demi Kata
         last_word_right = cur_x
         last_char_top = y_pos
         for w in words:
@@ -727,7 +727,6 @@ def draw_multiline_text_advanced(
             last_char_top = y_pos + char_box[1]
             cur_x += w_len + space_w
 
-        # 3. Pasang Logo Tenda jika diminta pada baris ini (Format 4: baris 1, Format 5: baris 2)
         if tent_on_line == (line_idx + 1):
             draw_cover_tent_logo(canvas, last_word_right, last_char_top)
 
@@ -736,7 +735,6 @@ def draw_multiline_text_advanced(
     return y_pos
 
 def extract_cutout_rgba(img_path):
-    """Mengekstrak subjek utama tanpa background menggunakan rembg (untuk Format 2 & 5)"""
     src = Image.open(img_path).convert("RGBA")
     if HAS_REMBG:
         try:
@@ -753,7 +751,6 @@ def extract_cutout_rgba(img_path):
     return src
 
 def paste_full_bleed_with_top_fade(canvas, src_img_path, y_start=780, fade_height=180):
-    """Menempelkan gambar full-bleed di bagian bawah dengan gradasi memudar halus ke putih di bagian atas (Format 3 & 4)"""
     if not os.path.exists(src_img_path):
         return
     W = 1080
@@ -772,7 +769,6 @@ def paste_full_bleed_with_top_fade(canvas, src_img_path, y_start=780, fade_heigh
     top = (nh - target_h) // 2
     img = img.crop((left, top, left + W, top + target_h))
 
-    # Buat alpha mask gradasi di bagian atas agar menyatu mulus dengan latar putih
     if fade_height > 0:
         mask = Image.new("L", (W, target_h), 255)
         m_draw = ImageDraw.Draw(mask)
@@ -784,7 +780,6 @@ def paste_full_bleed_with_top_fade(canvas, src_img_path, y_start=780, fade_heigh
     canvas.alpha_composite(img, (0, y_start))
 
 def create_converter_cover():
-    """Merender Cover sesuai Format Pilihan User (1 s/d 5)"""
     W, H = 1080, 1920
     canvas = Image.new("RGBA", (W, H), (255, 255, 255, 255))
     draw = ImageDraw.Draw(canvas)
@@ -793,7 +788,6 @@ def create_converter_cover():
     pill_bg = (224, 224, 224, 255)
     style = str(state.get("cover_style", "1"))
 
-    # 1. Logo Atas (Selalu Sama di Semua Format)
     draw_top_dark_logo_exact(canvas)
 
     raw_kw = state["converter_data"].get("kata_kunci_utama", "Info Gunung")
@@ -801,9 +795,6 @@ def create_converter_cover():
     judul = state["selected_title"].strip()
     bold_phrase = state.get("bold_phrase", "")
 
-    # =========================================================================
-    # FORMAT 1: GAMKONORA (Rata Kiri + Highlight Keyword + Kotak Foto Rounded)
-    # =========================================================================
     if style == "1":
         kw_len = len(kata_kunci)
         kw_size = 96 if kw_len <= 10 else (82 if kw_len <= 14 else 68)
@@ -846,9 +837,6 @@ def create_converter_cover():
             ImageDraw.Draw(mask).rounded_rectangle([0, 0, box_w, box_h], radius=34, fill=255)
             canvas.paste(src_img, (105, 885), mask)
 
-    # =========================================================================
-    # FORMAT 2: KRINCING (Rata Kiri + Subjek Cutout dengan Lengkungan Oval Bawah)
-    # =========================================================================
     elif style == "2":
         kw_len = len(kata_kunci)
         kw_size = 96 if kw_len <= 10 else (82 if kw_len <= 14 else 68)
@@ -885,7 +873,6 @@ def create_converter_cover():
                 target_w = int(cutout.width * scale)
             cutout = cutout.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
-            # Masking elips/oval di bagian bawah persis contoh Krincing
             oval_mask = Image.new("L", (target_w, target_h), 0)
             m_draw = ImageDraw.Draw(oval_mask)
             m_draw.rectangle([0, 0, target_w, int(target_h * 0.55)], fill=255)
@@ -899,11 +886,7 @@ def create_converter_cover():
             py = 1715 - target_h
             canvas.alpha_composite(cutout, (px, max(830, py)))
 
-    # =========================================================================
-    # FORMAT 3: GULA MERAH (Rata Tengah + Highlight di Sub-Judul + Ilustrasi)
-    # =========================================================================
     elif style == "3":
-        # Tempelkan gambar/ilustrasi di bawah terlebih dahulu
         paste_full_bleed_with_top_fade(canvas, state["cover_source_img"], y_start=780, fade_height=90)
 
         kw_len = len(kata_kunci)
@@ -921,7 +904,6 @@ def create_converter_cover():
         draw_cover_tent_logo(canvas, start_x + prefix_len + char_box[2], start_y + char_box[1])
 
         lines, f_sub_size = format_cover_headline_lines(judul, max_w=880, start_size=44, min_size=34, mode="balanced")
-        # Highlight otomatis pada 2 kata terakhir sub-judul (seperti "Lemas Mendadak")
         last_line_words = lines[-1].split() if lines else []
         hl_target = " ".join(last_line_words[-2:]) if len(last_line_words) >= 2 else (lines[-1] if lines else "")
 
@@ -930,14 +912,10 @@ def create_converter_cover():
             align="center", bold_phrase="", highlight_phrase=hl_target, pill_bg=pill_bg
         )
 
-    # =========================================================================
-    # FORMAT 4: SUNGAI QOLBU (Tanpa Keyword + Tenda Baris 1 + Top Fade Image)
-    # =========================================================================
     elif style == "4":
         paste_full_bleed_with_top_fade(canvas, state["cover_source_img"], y_start=770, fade_height=190)
 
         lines, f_sub_size = format_cover_headline_lines(judul, max_w=880, start_size=50, min_size=38, mode="balanced")
-        # Default bold pada 2 kata pertama jika user belum memilih bold
         words_all = judul.split()
         auto_bold = bold_phrase if bold_phrase else " ".join(words_all[:2])
 
@@ -946,11 +924,7 @@ def create_converter_cover():
             align="center", bold_phrase=auto_bold, tent_on_line=1
         )
 
-    # =========================================================================
-    # FORMAT 5: TRAGEDI DUKONO (Tanpa Keyword + Tenda Baris 2 + Cutout/Komposit)
-    # =========================================================================
     elif style == "5":
-        # Jika ada ilustrasi latar gunung, pasang terlebih dahulu
         if os.path.exists(state["bg_illustration_img"]):
             paste_full_bleed_with_top_fade(canvas, state["bg_illustration_img"], y_start=650, fade_height=140)
 
@@ -969,7 +943,6 @@ def create_converter_cover():
             canvas.alpha_composite(cutout, (px, max(680, py)))
 
         lines, f_sub_size = format_cover_headline_lines(judul, max_w=890, start_size=52, min_size=38, mode="balanced")
-        # Default bold pada 3 kata terakhir di baris ke-2 (seperti "Tanggung Jawab Guide!")
         words_all = judul.split()
         auto_bold = bold_phrase if bold_phrase else " ".join(words_all[-3:])
 
@@ -978,7 +951,6 @@ def create_converter_cover():
             align="center", bold_phrase=auto_bold, tent_on_line=len(lines[:2])
         )
 
-    # 6. Kapsul Abu-Abu Bawah & Logo CampersMagz (Selalu di Lapisan Paling Atas)
     draw_footer_bar(canvas, draw)
 
     out_img = canvas.convert("RGB")
@@ -1106,32 +1078,121 @@ def create_video_overlays(custom_source=None):
     return path_logos, path_title
 
 # ==========================================
-# 7. SISTEM MUSIK INSTRUMENTAL SINEMATIK (DINAMIKA TINGGI DI TENGAH)
+# 7. ENGINE MUSIK INSTRUMENTAL ANTI-GAGAL (CDN + PYTHON MULTI-INSTRUMENT SYNTH)
 # ==========================================
+# Menggunakan URL CDN publik yang mengizinkan akses langsung dari GitHub Actions
 CAPCUT_MUSIC_LIBRARY = {
     "urgent": [
-        "https://assets.mixkit.co/music/preview/mixkit-cinematic-mystery-trailer-278.mp3",
-        "https://assets.mixkit.co/music/preview/mixkit-Suspense-mystery-bass-685.mp3",
-        "https://assets.mixkit.co/music/preview/mixkit-deep-urban-623.mp3"
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-7.mp3",
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-15.mp3"
     ],
     "somber": [
-        "https://assets.mixkit.co/music/preview/mixkit-sad-piano-melody-282.mp3",
-        "https://assets.mixkit.co/music/preview/mixkit-alone-in-the-dark-26.mp3",
-        "https://assets.mixkit.co/music/preview/mixkit-sorrow-and-hope-562.mp3"
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3",
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-9.mp3",
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-12.mp3"
     ],
     "upbeat": [
-        "https://assets.mixkit.co/music/preview/mixkit-driving-ambition-32.mp3",
-        "https://assets.mixkit.co/music/preview/mixkit-sun-and-his-daughter-580.mp3",
-        "https://assets.mixkit.co/music/preview/mixkit-tech-house-vibes-130.mp3"
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-6.mp3",
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-10.mp3"
     ],
     "chill": [
-        "https://assets.mixkit.co/music/preview/mixkit-valley-sunset-127.mp3",
-        "https://assets.mixkit.co/music/preview/mixkit-serene-view-443.mp3",
-        "https://assets.mixkit.co/music/preview/mixkit-forest-treasure-138.mp3"
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3",
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-14.mp3"
     ]
 }
 
+def generate_cinematic_wav_python(mood="chill", duration=6, out_wav="synth_ fallback.wav"):
+    """
+    Generator Multi-Instrumen Murni di Python (100% Bebas Error FFmpeg lavfi/aevalsrc):
+    - Menggabungkan 4 instrumen: Bass Drone, Percussion/Heartbeat Kick, Arpeggio Piano/Pluck, dan Strings Pad.
+    - Menerapkan kurva dinamika dramatis: Awal Pelan (0-1.8s) -> Puncak Menghentak di Tengah (1.8-4.4s) -> Akhir Mereda (4.4-6.0s).
+    """
+    sample_rate = 44100
+    num_samples = int(sample_rate * duration)
+
+    if mood == "urgent":
+        # Nada D-minor Tegang: Heartbeat cepat + Sub-bass + Suspense Arpeggio
+        chords = [146.83, 174.61, 220.00, 293.66]
+        bass_freq = 73.42
+        beat_bpm = 135.0
+    elif mood == "somber":
+        # Nada A-minor Khidmat/Duka: Cello dalam + Piano lambat
+        chords = [110.00, 130.81, 164.81, 220.00]
+        bass_freq = 55.00
+        beat_bpm = 72.0
+    elif mood == "upbeat":
+        # Nada C-major Energik: Ketukan cepat + Akor Cerah
+        chords = [261.63, 329.63, 392.00, 523.25]
+        bass_freq = 130.81
+        beat_bpm = 124.0
+    else:
+        # Nada F-major7 Chill/Alam: Akor hangat + Petikan akustik
+        chords = [174.61, 220.00, 261.63, 329.63]
+        bass_freq = 87.31
+        beat_bpm = 96.0
+
+    beat_period = 60.0 / beat_bpm
+    arp_period = beat_period / 2.0
+
+    with wave.open(out_wav, "w") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+
+        frames = bytearray()
+        for i in range(num_samples):
+            t = i / float(sample_rate)
+
+            # Kurva Dinamika: Awal pelan (0.45) -> Puncak tengah kencang (1.0) -> Akhir mereda (0.15)
+            if t < 1.8:
+                dyn_env = 0.40 + 0.60 * (t / 1.8)
+            elif t <= 4.4:
+                dyn_env = 1.00
+            else:
+                dyn_env = max(0.10, 1.00 - 0.85 * ((t - 4.4) / 1.6))
+
+            # Instrumen 1: Warm Cello / Bass Pad (Fundamental + Harmonik)
+            bass = 0.28 * math.sin(2.0 * math.pi * bass_freq * t) + 0.12 * math.sin(2.0 * math.pi * (bass_freq * 2.0) * t)
+
+            # Instrumen 2: Taiko / Heartbeat Kick Drum (Frequency sweep)
+            beat_phase = t % beat_period
+            kick_freq = 115.0 * math.exp(-18.0 * beat_phase) + 42.0
+            kick_env = math.exp(-7.5 * beat_phase)
+            kick = 0.42 * math.sin(2.0 * math.pi * kick_freq * beat_phase) * kick_env
+
+            # Instrumen 3: Piano / Acoustic Pluck Arpeggio (Berganti nada setiap setengah ketukan)
+            arp_idx = int(t / arp_period) % len(chords)
+            arp_phase = t % arp_period
+            note_freq = chords[arp_idx]
+            pluck_env = math.exp(-5.5 * arp_phase)
+            pluck = (
+                0.26 * math.sin(2.0 * math.pi * note_freq * t)
+                + 0.10 * math.sin(2.0 * math.pi * (note_freq * 2.0) * t)
+            ) * pluck_env
+
+            # Instrumen 4: Cinematic String Swell (Khusus menguat di bagian tengah)
+            swell = 0.16 * (
+                math.sin(2.0 * math.pi * chords[0] * t)
+                + math.sin(2.0 * math.pi * chords[2] * t)
+            )
+
+            sample_val = (bass + kick + pluck + swell) * dyn_env
+            sample_val = max(-0.98, min(0.98, sample_val))
+            frames.extend(struct.pack("<h", int(sample_val * 32767)))
+
+        wf.writeframes(frames)
+    return out_wav
+
 def prepare_mood_audio(mood="chill", duration=6):
+    """
+    Menyiapkan musik latar instrumen asli dengan kurva dinamika sinematik dan anti-error FFmpeg:
+    1. Cek file MP3 lokal di repo.
+    2. Jika tidak ada, unduh lagu instrumen dari CDN SoundHelix (diambil pada detik ke-25 saat seluruh instrumen aktif).
+    3. Jika CDN terputus, gunakan Python Multi-Instrument Synthesizer (generate_cinematic_wav_python).
+    """
     mood = str(mood).lower().strip() if mood else "chill"
     if mood not in ["urgent", "somber", "upbeat", "chill"]:
         mood = "chill"
@@ -1140,77 +1201,59 @@ def prepare_mood_audio(mood="chill", duration=6):
     processed_audio = f"ready_{mood}.mp3"
 
     local_candidates = [f for f in os.listdir(".") if f.lower().startswith(f"bgm_{mood}") and f.lower().endswith(".mp3")]
+    has_source = False
+
     if local_candidates:
         raw_audio = random.choice(local_candidates)
+        has_source = True
     elif os.path.exists("bgm.mp3"):
         raw_audio = "bgm.mp3"
+        has_source = True
     else:
         urls = list(CAPCUT_MUSIC_LIBRARY.get(mood, CAPCUT_MUSIC_LIBRARY["chill"]))
         random.shuffle(urls)
-        downloaded = False
         headers = {"User-Agent": "Mozilla/5.0"}
         for u in urls:
             try:
-                r = requests.get(u, headers=headers, timeout=12)
-                if r.status_code == 200 and len(r.content) > 30000:
+                r = requests.get(u, headers=headers, timeout=15)
+                if r.status_code == 200 and len(r.content) > 50000:
                     with open(raw_audio, "wb") as f:
                         f.write(r.content)
-                    downloaded = True
+                    has_source = True
+                    print(f"Musik studio ({mood}) berhasil diunduh: {u}")
                     break
-            except Exception:
-                continue
+            except Exception as e:
+                print(f"Skip URL {u}: {e}")
 
-        if not downloaded:
-            if mood == "urgent":
-                expr = (
-                    "0.4*sin(2*PI*55*t)*exp(-1.5*mod(t,0.8)) + "
-                    "0.35*sin(2*PI*110*t)*exp(-6*mod(t,0.4)) + "
-                    "0.25*sin(2*PI*440*t)*exp(-12*mod(t,0.2))"
-                )
-            elif mood == "somber":
-                expr = (
-                    "0.45*sin(2*PI*65.41*t) + "
-                    "0.35*sin(2*PI*130.81*t)*exp(-0.8*mod(t,2)) + "
-                    "0.2*sin(2*PI*196.0*t)*exp(-1.2*mod(t,1.5))"
-                )
-            elif mood == "upbeat":
-                expr = (
-                    "0.4*sin(2*PI*130.81*t)*exp(-4*mod(t,0.35)) + "
-                    "0.35*sin(2*PI*261.63*t)*exp(-3*mod(t,0.35)) + "
-                    "0.25*sin(2*PI*392.0*t)*exp(-4*mod(t,0.7))"
-                )
-            else:
-                expr = (
-                    "0.35*sin(2*PI*110*t) + "
-                    "0.3*sin(2*PI*164.81*t) + "
-                    "0.25*sin(2*PI*220*t)*exp(-2*mod(t,1))"
-                )
-
-            subprocess.run([
-                "ffmpeg", "-y", "-f", "lavfi",
-                "-i", f"aevalsrc={expr}:s=44100:d={duration}",
-                "-af", "loudnorm=I=-14:TP=-1.0:LRA=11,volume=1.8", processed_audio
-            ], check=True)
+    # Jika berhasil dapat MP3 studio, potong bagian klimaks (detik 25) dan beri efek fade-in & fade-out + loudnorm
+    if has_source:
+        af_simple = "afade=t=in:st=0:d=1.2,afade=t=out:st=4.6:d=1.4,loudnorm=I=-14:TP=-1.0:LRA=11,volume=1.3"
+        cmd_master = [
+            "ffmpeg", "-y", "-ss", "25", "-t", str(duration), "-i", raw_audio,
+            "-af", af_simple,
+            processed_audio
+        ]
+        res = subprocess.run(cmd_master)
+        if res.returncode == 0 and os.path.exists(processed_audio):
             return processed_audio
 
-    dynamic_envelope = (
-        "loudnorm=I=-14:TP=-1.0:LRA=11,"
-        "volume='if(between(t,1.8,4.4), 1.55, if(lt(t,1.8), 0.45+0.6*(t/1.8), 1.55-1.2*((t-4.4)/1.6)))':eval=frame"
-    )
-
-    cmd_master = [
-        "ffmpeg", "-y", "-ss", "10", "-t", str(duration), "-i", raw_audio,
-        "-af", dynamic_envelope,
-        processed_audio
-    ]
-    res = subprocess.run(cmd_master)
-    if res.returncode != 0 or not os.path.exists(processed_audio):
-        subprocess.run([
+        # Jika durasi file lokal < 25 detik, potong dari detik 0
+        res_zero = subprocess.run([
             "ffmpeg", "-y", "-ss", "0", "-t", str(duration), "-i", raw_audio,
-            "-af", dynamic_envelope,
+            "-af", af_simple,
             processed_audio
-        ], check=True)
+        ])
+        if res_zero.returncode == 0 and os.path.exists(processed_audio):
+            return processed_audio
 
+    # Fallback Anti-Gagal: Buat WAV Multi-Instrumen dengan Python, lalu konversi ke MP3
+    wav_file = f"synth_{mood}.wav"
+    generate_cinematic_wav_python(mood=mood, duration=duration, out_wav=wav_file)
+    subprocess.run([
+        "ffmpeg", "-y", "-i", wav_file,
+        "-af", "loudnorm=I=-14:TP=-1.0:LRA=11",
+        processed_audio
+    ], check=True)
     return processed_audio
 
 def render_final_video(mode="pan_image", add_instrumental=True):
@@ -1236,7 +1279,7 @@ def render_final_video(mode="pan_image", add_instrumental=True):
             "-loop", "1", "-t", "6", "-i", overlay_title
         ]
         if has_bgm:
-            fc = vf + ";[3:a]afade=t=in:st=0:d=0.3,afade=t=out:st=4.8:d=1.2[outa]"
+            fc = vf + ";[3:a]volume=1.0[outa]"
             cmd += ["-i", bgm_p, "-filter_complex", fc, "-map", "[outv]", "-map", "[outa]"]
         else:
             cmd += ["-filter_complex", vf, "-map", "[outv]"]
@@ -1266,11 +1309,11 @@ def render_final_video(mode="pan_image", add_instrumental=True):
                 fc = (
                     f"{vf};"
                     "[0:a]volume=0.7,afade=t=out:st=4.8:d=1.2[orig_a];"
-                    "[3:a]volume=1.0,afade=t=in:st=0:d=0.3,afade=t=out:st=4.8:d=1.2[bgm];"
-                    "[orig_a][bgm]amix=inputs=2:duration=first:dropout_transition=0,volume=1.5[outa]"
+                    "[3:a]volume=1.0[bgm];"
+                    "[orig_a][bgm]amix=inputs=2:duration=first:dropout_transition=0,volume=1.4[outa]"
                 )
             else:
-                fc = f"{vf};[3:a]afade=t=in:st=0:d=0.3,afade=t=out:st=4.8:d=1.2[outa]"
+                fc = f"{vf};[3:a]volume=1.0[outa]"
             cmd += ["-filter_complex", fc, "-map", "[outv]", "-map", "[outa]"]
         else:
             if vid_has_a:
@@ -1290,11 +1333,11 @@ def render_final_video(mode="pan_image", add_instrumental=True):
     return output_mp4
 
 # ==========================================
-# 8. HANDLER INTERAKTIF TELEGRAM (DILENGKAPI PILIHAN 5 FORMAT COVER)
+# 8. HANDLER INTERAKTIF TELEGRAM (5 FORMAT COVER + PROTEKSI PENUH)
 # ==========================================
 def send_news_candidate():
     if state["current_idx"] >= len(state["articles"]):
-        bot.send_message(TELEGRAM_CHAT_ID, "⚠️ Semua berita terbaru sudah ditampilkan.")
+        safe_send_message(TELEGRAM_CHAT_ID, "⚠️ Semua berita terbaru sudah ditampilkan.")
         bot.stop_polling()
         return
     art = state["articles"][state["current_idx"]]
@@ -1306,7 +1349,7 @@ def send_news_candidate():
     )
     idx_num = state["current_idx"] + 1
     msg = f"📰 *KANDIDAT BERITA #{idx_num}*\n\n*{art.title}*\n\n🔗 {art.link}"
-    bot.send_message(TELEGRAM_CHAT_ID, msg, parse_mode="Markdown", reply_markup=markup)
+    safe_send_message(TELEGRAM_CHAT_ID, msg, reply_markup=markup)
 
 def send_cover_preview(cover_path):
     mood_raw = state["converter_data"].get("mood_musik") or "chill"
@@ -1341,7 +1384,7 @@ def send_cover_style_options():
         "4️⃣ *Sungai Qolbu*: Tanpa nama gunung besar, judul 2 baris tengah, tenda di baris 1, gambar memudar di atas.\n"
         "5️⃣ *Tragedi Dukono*: Tanpa nama gunung besar, judul 2 baris tengah, tenda di baris 2, subjek cutout komposit."
     )
-    bot.send_message(TELEGRAM_CHAT_ID, txt, parse_mode="Markdown", reply_markup=markup)
+    safe_send_message(TELEGRAM_CHAT_ID, txt, reply_markup=markup)
 
 def send_title_options():
     markup = InlineKeyboardMarkup()
@@ -1351,7 +1394,7 @@ def send_title_options():
         txt += f"{i+1}. {j}\n"
         markup.add(InlineKeyboardButton(f"Pilih Judul #{i+1}", callback_data=f"title_{i}"))
     markup.add(InlineKeyboardButton("✍️ Buat Judul Sendiri", callback_data="title_custom"))
-    bot.send_message(TELEGRAM_CHAT_ID, txt, parse_mode="Markdown", reply_markup=markup)
+    safe_send_message(TELEGRAM_CHAT_ID, txt, reply_markup=markup)
 
 def send_bold_options():
     frasa_ai = state["converter_data"].get("frasa_tebal", "").strip()
@@ -1368,7 +1411,7 @@ def send_bold_options():
         f"Judul Terpilih:\n*{state['selected_title']}*\n\n"
         f"Pilih gaya penebalan huruf pada judul cover:"
     )
-    bot.send_message(TELEGRAM_CHAT_ID, txt, parse_mode="Markdown", reply_markup=markup)
+    safe_send_message(TELEGRAM_CHAT_ID, txt, reply_markup=markup)
 
 def send_caption_review():
     cap = build_full_article_text()
@@ -1377,7 +1420,7 @@ def send_caption_review():
         InlineKeyboardButton("✅ Pilih Caption Ini", callback_data="cap_keep"),
         InlineKeyboardButton("🔄 Generate Caption Lain", callback_data="cap_regen")
     )
-    bot.send_message(TELEGRAM_CHAT_ID, f"📝 *REVIEW CAPTION RESMI CAMPERSMAGZ:*\n\n{cap}", reply_markup=markup)
+    bot.send_message(TELEGRAM_CHAT_ID, f"📝 REVIEW CAPTION RESMI CAMPERSMAGZ:\n\n{cap}", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
@@ -1389,7 +1432,7 @@ def handle_callbacks(call):
             send_news_candidate()
         elif data == "news_accept":
             bot.answer_callback_query(call.id, "Memproses draf...")
-            bot.send_message(TELEGRAM_CHAT_ID, "⏳ Mengambil foto asli berita & menyusun Cover...")
+            safe_send_message(TELEGRAM_CHAT_ID, "⏳ Mengambil foto asli berita & menyusun Cover...")
             extract_article_image(state["article"])
             state["converter_data"] = generate_converter_content(state["article"])
             state["selected_title"] = state["converter_data"]["opsi_judul"][0]
@@ -1406,9 +1449,8 @@ def handle_callbacks(call):
             chosen = data.split("_")[1]
             state["cover_style"] = chosen
             bot.answer_callback_query(call.id, f"Format {chosen} dipilih!")
-            bot.send_message(TELEGRAM_CHAT_ID, f"⏳ Merender ulang cover dengan *{COVER_STYLES[chosen]}*...", parse_mode="Markdown")
+            safe_send_message(TELEGRAM_CHAT_ID, f"⏳ Merender ulang cover dengan *{COVER_STYLES[chosen]}*...")
 
-            # Jika memilih Format 5 (Dukono) dan belum ada ilustrasi background gunung, buat otomatis via Gemini
             if chosen == "5" and not os.path.exists(state["bg_illustration_img"]) and GEMINI_API_KEY:
                 kw = state["converter_data"].get("kata_kunci_utama", "gunung berapi")
                 generate_nano_banana_art(f"erupting volcano mountain smoke illustration {kw}", save_path=state["bg_illustration_img"])
@@ -1418,31 +1460,28 @@ def handle_callbacks(call):
 
         elif data == "cover_nano":
             bot.answer_callback_query(call.id, "Menjalankan Nano Banana...")
-            bot.send_message(TELEGRAM_CHAT_ID, "🎨 Sedang membuat Graphic Art dengan Nano Banana...")
+            safe_send_message(TELEGRAM_CHAT_ID, "🎨 Sedang membuat Graphic Art dengan Nano Banana...")
             kw = state["converter_data"].get("kata_kunci_utama", "pendaki gunung")
             success, msg_detail = generate_nano_banana_art(kw)
             if success:
-                # Jika user klik Nano Banana pada Format 1, otomatis tawarkan tampilan Format 3 (Gula Merah) atau Format 4 (Qolbu)
                 if state["cover_style"] in ["1", "2"]:
                     state["cover_style"] = "3"
                 cover_path = create_converter_cover()
-                bot.send_message(TELEGRAM_CHAT_ID, "✅ *Cover Nano Banana berhasil diperbarui!*", parse_mode="Markdown")
+                safe_send_message(TELEGRAM_CHAT_ID, "✅ *Cover Nano Banana berhasil diperbarui!*")
                 send_cover_preview(cover_path)
             else:
-                bot.send_message(
+                safe_send_message(
                     TELEGRAM_CHAT_ID,
                     f"⚠️ *Nano Banana tidak dapat membuat gambar:*\n`{msg_detail}`\n\n"
-                    "💡 *Solusi:* Silakan klik tombol *Upload Foto Cover Sendiri* di atas.",
-                    parse_mode="Markdown"
+                    "💡 *Solusi:* Silakan klik tombol *Upload Foto Cover Sendiri* di atas."
                 )
         elif data == "cover_upload":
             state["waiting_for_cover_upload"] = True
             bot.answer_callback_query(call.id, "Silakan upload foto...")
-            bot.send_message(
+            safe_send_message(
                 TELEGRAM_CHAT_ID,
                 "📤 *Silakan kirim/upload FOTO untuk cover sekarang.*\n\n"
-                "💡 *PENTING:* Tuliskan sumber foto pada kolom *Caption* saat mengirim foto (contoh: `instagram/@pendaki_lawu` atau `kompas.com`).",
-                parse_mode="Markdown"
+                "💡 *PENTING:* Tuliskan sumber foto pada kolom *Caption* saat mengirim foto (contoh: `instagram/@pendaki_lawu` atau `kompas.com`)."
             )
         elif data == "cover_keep":
             bot.answer_callback_query(call.id, "Cover dikunci!")
@@ -1452,10 +1491,9 @@ def handle_callbacks(call):
             if data == "title_custom":
                 state["waiting_for_custom_title"] = True
                 bot.answer_callback_query(call.id, "Tulis judul Anda...")
-                bot.send_message(
+                safe_send_message(
                     TELEGRAM_CHAT_ID,
-                    "✏️ *Silakan kirimkan teks judul buatan Anda sendiri:*",
-                    parse_mode="Markdown"
+                    "✏️ *Silakan kirimkan teks judul buatan Anda sendiri:*"
                 )
             else:
                 idx = int(data.split("_")[1])
@@ -1500,11 +1538,10 @@ def handle_callbacks(call):
         elif data == "bold_custom":
             state["waiting_for_custom_bold"] = True
             bot.answer_callback_query(call.id, "Ketik kata tebal...")
-            bot.send_message(
+            safe_send_message(
                 TELEGRAM_CHAT_ID,
                 "✍️ *Ketikkan kata/frasa dari judul yang ingin Anda buat tebal:*\n"
-                f"(Judul saat ini: `{state['selected_title']}`)",
-                parse_mode="Markdown"
+                f"(Judul saat ini: `{state['selected_title']}`)"
             )
 
         elif data == "cap_regen":
@@ -1519,33 +1556,33 @@ def handle_callbacks(call):
                 InlineKeyboardButton("🎞️ Tidak Upload Video (Pan 6s)", callback_data="vid_no_upload"),
                 InlineKeyboardButton("📤 Upload Video (Auto 6s)", callback_data="vid_upload")
             )
-            bot.send_message(TELEGRAM_CHAT_ID, "🎬 *PILIH OPSI PEMBUATAN VIDEO:*", parse_mode="Markdown", reply_markup=markup)
+            safe_send_message(TELEGRAM_CHAT_ID, "🎬 *PILIH OPSI PEMBUATAN VIDEO:*", reply_markup=markup)
 
         elif data == "vid_no_upload":
             bot.answer_callback_query(call.id, "Merender video 6 detik...")
             mood_raw = state["converter_data"].get("mood_musik") or "chill"
             mood = str(mood_raw).upper()
-            bot.send_message(TELEGRAM_CHAT_ID, f"⚙️ Merender video Pan 6 detik + Musik Sinematik ({mood}) Dinamika Tinggi...")
+            safe_send_message(TELEGRAM_CHAT_ID, f"⚙️ Merender video Pan 6 detik + Musik Sinematik ({mood}) Dinamika Tinggi...")
             mp4 = render_final_video(mode="pan_image", add_instrumental=True)
             send_final_package(mp4)
 
         elif data == "vid_upload":
             state["waiting_for_video_upload"] = True
             bot.answer_callback_query(call.id, "Silakan upload video...")
-            bot.send_message(TELEGRAM_CHAT_ID, "📤 *Silakan upload video Anda (otomatis di-crop 6 detik awal).* Tulis sumber di Caption.", parse_mode="Markdown")
+            safe_send_message(TELEGRAM_CHAT_ID, "📤 *Silakan upload video Anda (otomatis di-crop 6 detik awal).* Tulis sumber di Caption.")
 
         elif data in ["bgm_yes", "bgm_no"]:
             add_bgm = (data == "bgm_yes")
             bot.answer_callback_query(call.id, "Mengedit video...")
             mood_raw = state["converter_data"].get("mood_musik") or "chill"
             mood = str(mood_raw).upper()
-            bot.send_message(TELEGRAM_CHAT_ID, f"⚙️ Mengedit video 6 detik + Musik Sinematik ({mood}) + Fade In Judul...", parse_mode="Markdown")
+            safe_send_message(TELEGRAM_CHAT_ID, f"⚙️ Mengedit video 6 detik + Musik Sinematik ({mood}) + Fade In Judul...")
             mp4 = render_final_video(mode="user_video", add_instrumental=add_bgm)
             send_final_package(mp4)
 
     except Exception as e:
         print(f"Callback error: {e}")
-        bot.send_message(TELEGRAM_CHAT_ID, f"⚠️ Terjadi kendala teknis: `{e}`", parse_mode="Markdown")
+        safe_send_message(TELEGRAM_CHAT_ID, f"⚠️ Terjadi kendala teknis: {e}", parse_mode=None)
 
 @bot.message_handler(content_types=["text"])
 def handle_user_text_inputs(message):
@@ -1553,7 +1590,7 @@ def handle_user_text_inputs(message):
         user_title = message.text.strip()
         state["selected_title"] = user_title
         state["waiting_for_custom_title"] = False
-        bot.send_message(TELEGRAM_CHAT_ID, f"✅ *Judul ditetapkan:* `{user_title}`", parse_mode="Markdown")
+        safe_send_message(TELEGRAM_CHAT_ID, f"✅ *Judul ditetapkan:* `{user_title}`")
         send_bold_options()
         return
 
@@ -1563,7 +1600,7 @@ def handle_user_text_inputs(message):
         state["waiting_for_custom_bold"] = False
         new_cov = create_converter_cover()
         with open(new_cov, "rb") as ph:
-            bot.send_photo(TELEGRAM_CHAT_ID, ph, caption=f"✅ *Cover Diperbarui:* Kata `{user_bold}` berhasil ditebalkan!", parse_mode="Markdown")
+            bot.send_photo(TELEGRAM_CHAT_ID, ph, caption=f"✅ Cover Diperbarui: Kata '{user_bold}' berhasil ditebalkan!")
         send_caption_review()
         return
 
@@ -1571,26 +1608,30 @@ def handle_user_text_inputs(message):
 def handle_user_cover_photo(message):
     if not state["waiting_for_cover_upload"]:
         return
-    bot.send_message(TELEGRAM_CHAT_ID, "⏳ Mengunduh foto cover & menyusun ulang...")
-    f_info = bot.get_file(message.photo[-1].file_id)
-    dl = bot.download_file(f_info.file_path)
-    with open(state["cover_source_img"], "wb") as f:
-        f.write(dl)
+    try:
+        safe_send_message(TELEGRAM_CHAT_ID, "⏳ Mengunduh foto cover & menyusun ulang...")
+        f_info = bot.get_file(message.photo[-1].file_id)
+        file_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{f_info.file_path}"
+        r = requests.get(file_url, timeout=45)
+        with open(state["cover_source_img"], "wb") as f:
+            f.write(r.content)
 
-    if message.caption and message.caption.strip():
-        raw_cap = message.caption.strip()
-        clean_cap = re.sub(r'^(?:foto|photo)\s*:\s*', '', raw_cap, flags=re.IGNORECASE).strip()
-        state["custom_cover_source"] = clean_cap
-    else:
-        state["custom_cover_source"] = ""
+        if message.caption and message.caption.strip():
+            raw_cap = message.caption.strip()
+            clean_cap = re.sub(r'^(?:foto|photo)\s*:\s*', '', raw_cap, flags=re.IGNORECASE).strip()
+            state["custom_cover_source"] = clean_cap
+        else:
+            state["custom_cover_source"] = ""
 
-    state["is_ai_art"] = False
-    state["waiting_for_cover_upload"] = False
-    new_cov = create_converter_cover()
+        state["is_ai_art"] = False
+        state["waiting_for_cover_upload"] = False
+        new_cov = create_converter_cover()
 
-    src_info = f" (Sumber: `{state['custom_cover_source']}`)" if state["custom_cover_source"] else ""
-    bot.send_message(TELEGRAM_CHAT_ID, f"✅ *Foto cover berhasil dipasang!*{src_info}", parse_mode="Markdown")
-    send_cover_preview(new_cov)
+        src_info = f" (Sumber: {state['custom_cover_source']})" if state["custom_cover_source"] else ""
+        safe_send_message(TELEGRAM_CHAT_ID, f"✅ Foto cover berhasil dipasang!{src_info}", parse_mode=None)
+        send_cover_preview(new_cov)
+    except Exception as e:
+        safe_send_message(TELEGRAM_CHAT_ID, f"⚠️ Gagal memproses foto: {e}", parse_mode=None)
 
 @bot.message_handler(content_types=["video", "document"])
 def handle_user_video(message):
@@ -1599,10 +1640,10 @@ def handle_user_video(message):
     try:
         vid_obj = message.video or (message.document if message.document and (message.document.mime_type or "").startswith("video/") else None)
         if not vid_obj:
-            bot.send_message(TELEGRAM_CHAT_ID, "⚠️ Berkas yang Anda kirim bukan file video yang valid. Silakan kirim file video (.mp4).")
+            safe_send_message(TELEGRAM_CHAT_ID, "⚠️ Berkas yang Anda kirim bukan file video yang valid. Silakan kirim file video (.mp4).")
             return
 
-        bot.send_message(TELEGRAM_CHAT_ID, "⏳ Mengunduh video Anda (otomatis di-crop 6 detik awal)...")
+        safe_send_message(TELEGRAM_CHAT_ID, "⏳ Mengunduh video Anda (otomatis di-crop 6 detik awal)...")
         f_info = bot.get_file(vid_obj.file_id)
         file_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{f_info.file_path}"
         r = requests.get(file_url, timeout=60)
@@ -1627,30 +1668,30 @@ def handle_user_video(message):
             InlineKeyboardButton(f"🎵 Instrumental ({mood})", callback_data="bgm_yes"),
             InlineKeyboardButton("🔇 Tanpa Instrumental", callback_data="bgm_no")
         )
-        bot.send_message(TELEGRAM_CHAT_ID, "🎶 *Pilih opsi audio video:*", parse_mode="Markdown", reply_markup=markup)
+        safe_send_message(TELEGRAM_CHAT_ID, "🎶 *Pilih opsi audio video:*", reply_markup=markup)
 
     except Exception as e:
         print(f"Error handle_user_video: {e}")
-        bot.send_message(
+        safe_send_message(
             TELEGRAM_CHAT_ID,
-            f"⚠️ *Gagal memproses video unggahan:*\n`{e}`\n\n"
-            "💡 Silakan coba kirim ulang videonya atau pilih opsi *Tidak Upload Video (Pan 6s)*.",
-            parse_mode="Markdown"
+            f"⚠️ Gagal memproses video unggahan: {e}\n\n"
+            "💡 Silakan coba kirim ulang videonya atau pilih opsi Tidak Upload Video (Pan 6s).",
+            parse_mode=None
         )
 
 def send_final_package(mp4_path):
     full_text = build_full_article_text()
     judul_unicode = to_unicode_bold(state["selected_title"].strip())
     with open(state["final_cover_img"], "rb") as cov:
-        bot.send_photo(TELEGRAM_CHAT_ID, cov, caption="✅ *COVER FINAL*", parse_mode="Markdown")
+        bot.send_photo(TELEGRAM_CHAT_ID, cov, caption="✅ COVER FINAL")
 
     sumber_val = state["converter_data"].get("sumber") or state["converter_data"].get("sumber_media") or "Media"
     v_cap = f"{judul_unicode}\n\nSumber: {sumber_val}"
     with open(mp4_path, "rb") as vid:
         bot.send_video(TELEGRAM_CHAT_ID, vid, caption=v_cap)
 
-    bot.send_message(TELEGRAM_CHAT_ID, f"📝 *CAPTION SIAP POSTING (TINGGAL SALIN):*\n\n{full_text}")
-    bot.send_message(TELEGRAM_CHAT_ID, "🎉 *Selesai!* Seluruh paket berita CampersMagz sudah siap diposting.")
+    bot.send_message(TELEGRAM_CHAT_ID, f"📝 CAPTION SIAP POSTING (TINGGAL SALIN):\n\n{full_text}")
+    safe_send_message(TELEGRAM_CHAT_ID, "🎉 *Selesai!* Seluruh paket berita CampersMagz sudah siap diposting.")
     bot.stop_polling()
 
 if __name__ == "__main__":
