@@ -49,9 +49,11 @@ state = {
     "articles": [],
     "current_idx": 0,
     "article": None,
+    "full_article_text": "",
     "converter_data": None,
     "selected_title": "",
     "bold_phrase": "",
+    "cta_choice": "otomatis",
     "cover_style": "1",
     "cover_source_img": "source_img.jpg",
     "bg_illustration_img": "bg_illus.jpg",
@@ -61,13 +63,15 @@ state = {
     "waiting_for_custom_title": False,
     "waiting_for_custom_bold": False,
     "uploaded_video_path": "user_video.mp4",
+    "video_mode": "pan_image",
+    "approved_bgm_path": None,
+    "music_gen_count": 0,
     "custom_source_text": "",
     "custom_cover_source": "",
     "is_ai_art": False
 }
 
 def safe_send_message(chat_id, text, reply_markup=None, parse_mode="Markdown"):
-    """Pengaman pengiriman pesan Telegram agar tidak pernah gagal akibat karakter khusus Markdown"""
     try:
         return bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
     except Exception:
@@ -200,7 +204,7 @@ def find_asset_file(exact_names, fallback_keywords):
     return None
 
 # ==========================================
-# 3. SCRAPER BERITA & NANO BANANA ART
+# 3. SCRAPER ARTIKEL PENUH & GAMBAR BERITA
 # ==========================================
 def fetch_articles():
     q = "berita+pendakian+gunung&hl=id&gl=ID&ceid=ID:id"
@@ -232,18 +236,35 @@ def resolve_google_news_url(google_url):
         pass
     return google_url
 
-def extract_article_image(article_entry):
+def scrape_full_article_and_image(article_entry):
     state["is_ai_art"] = False
     state["custom_cover_source"] = ""
+    state["full_article_text"] = ""
     headers = {
-        "User-Agent": "Mozilla/5.0 Chrome/124.0.0.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
         "Referer": "https://www.google.com/"
     }
+
     real_url = resolve_google_news_url(article_entry.link)
+    img_saved = False
+
     if "news.google.com" not in real_url:
         try:
-            resp = requests.get(real_url, headers=headers, timeout=12)
+            resp = requests.get(real_url, headers=headers, timeout=14)
             soup = BeautifulSoup(resp.text, "html.parser")
+
+            for junk in soup(["script", "style", "nav", "footer", "header", "aside", "form", "iframe"]):
+                junk.decompose()
+
+            paragraphs = []
+            for p in soup.find_all("p"):
+                txt = p.get_text(" ", strip=True)
+                if len(txt) > 45 and not any(x in txt.lower() for x in ["baca juga:", "ikuti kami", "copyright", "all rights reserved"]):
+                    paragraphs.append(txt)
+
+            if paragraphs:
+                state["full_article_text"] = "\n".join(paragraphs)[:3500]
+
             img_url = None
             for prop in ["og:image", "twitter:image", "image"]:
                 tag = soup.find("meta", property=prop) or soup.find("meta", attrs={"name": prop})
@@ -252,8 +273,7 @@ def extract_article_image(article_entry):
                         img_url = tag["content"]
                         break
             if not img_url:
-                sels = [".photo img", ".read__content img", "article img", "figure img"]
-                for sel in sels:
+                for sel in [".photo img", ".read__content img", "article img", "figure img"]:
                     el = soup.select_one(sel)
                     if el and (el.get("src") or el.get("data-src")):
                         img_url = el.get("src") or el.get("data-src")
@@ -265,33 +285,37 @@ def extract_article_image(article_entry):
                 img = Image.open(BytesIO(img_data)).convert("RGB")
                 if img.width >= 250:
                     img.save(state["cover_source_img"])
-                    return True
+                    img_saved = True
+        except Exception as e:
+            print(f"Scrape artikel error: {e}")
+
+    if not img_saved:
+        try:
+            clean_title = article_entry.title.rsplit("-", 1)[0].strip()
+            q_str = urllib.parse.quote(clean_title + " berita")
+            bing_url = f"https://www.bing.com/images/search?q={q_str}&form=HDRSC2"
+            r = requests.get(bing_url, headers=headers, timeout=10)
+            img_urls = re.findall(r'murl&quot;:&quot;(https?://[^&]+?)&quot;', r.text)
+            for cand in img_urls[:6]:
+                if any(b in cand.lower() for b in ["freepik", "vector", "icon"]):
+                    continue
+                try:
+                    c_data = requests.get(cand, headers=headers, timeout=8).content
+                    c_img = Image.open(BytesIO(c_data)).convert("RGB")
+                    if c_img.width >= 350 and c_img.height >= 220:
+                        c_img.save(state["cover_source_img"])
+                        img_saved = True
+                        break
+                except:
+                    continue
         except:
             pass
 
-    try:
+    if not img_saved:
         clean_title = article_entry.title.rsplit("-", 1)[0].strip()
-        q_str = urllib.parse.quote(clean_title + " berita")
-        bing_url = f"https://www.bing.com/images/search?q={q_str}&form=HDRSC2"
-        r = requests.get(bing_url, headers=headers, timeout=10)
-        img_urls = re.findall(r'murl&quot;:&quot;(https?://[^&]+?)&quot;', r.text)
-        for cand in img_urls[:6]:
-            if any(b in cand.lower() for b in ["freepik", "vector", "icon"]):
-                continue
-            try:
-                c_data = requests.get(cand, headers=headers, timeout=8).content
-                c_img = Image.open(BytesIO(c_data)).convert("RGB")
-                if c_img.width >= 350 and c_img.height >= 220:
-                    c_img.save(state["cover_source_img"])
-                    return True
-            except:
-                continue
-    except:
-        pass
+        generate_nano_banana_art(clean_title)
 
-    clean_title = article_entry.title.rsplit("-", 1)[0].strip()
-    success, _ = generate_nano_banana_art(clean_title)
-    return success
+    return True
 
 def generate_nano_banana_art(prompt_subject, save_path=None):
     target_path = save_path or state["cover_source_img"]
@@ -359,28 +383,71 @@ def generate_nano_banana_art(prompt_subject, save_path=None):
     return False, " | ".join(errors)
 
 # ==========================================
-# 4. KONTEN DRAF BERITA (STANDAR RESMI CAMPERSMAGZ)
+# 4. STANDAR BAKU "CAMPERSMAGZ - NEWS CONVERTER"
 # ==========================================
 SYSTEM_PROMPT = """
-Kamu adalah admin akun Instagram info pendakian (@campersmagz) yang juga pendaki berpengalaman.
-Gaya tulisanmu semi-formal: rapi, sopan, jelas, hangat, dan terpercaya. Nyaman dibaca usia 20 hingga 55 tahun.
+Kamu adalah penulis dan editor utama akun Instagram media pendakian @campersmagz ("CampersMagz - News Converter").
+Persona kamu adalah rekan sesama pendaki yang berpengalaman, dewasa, hangat, terpercaya, dan objektif.
+Tulisanmu ditujukan untuk pembaca usia 20–55 tahun dengan gaya bahasa semi-formal yang mengalir, jernih, sopan, dan enak dibaca.
 
-ATURAN AKURASI:
-- Gunakan HANYA fakta yang ada di bahan berita. DILARANG menambah data, angka, nama, atau lokasi yang tidak tercantum.
-- Jika ada info belum pasti, tulis apa adanya ("belum ada konfirmasi resmi").
-- Untuk kabar musibah/SAR, gunakan nada tenang dan empatik. Jangan clickbait.
+PRINSIP UTAMA & AKURASI FAKTA:
+1. Gunakan 100% fakta dari teks berita yang diberikan. DILARANG KERAS mengarang angka, tanggal, nama lokasi, atau kronologi di luar teks sumber.
+2. Jika suatu detail belum terkonfirmasi di berita, tuliskan secara jujur (misal: "penyebab pasti masih dalam penyelidikan pihak terkait").
+3. Untuk berita duka, kecelakaan, atau orang hilang (SAR), gunakan nada yang tenang, empatik, menghormati korban/keluarga, dan hindari sensasionalisme/clickbait.
 
-CARA MENULIS:
-1. Buka teras langsung pada inti kabar (contoh: "Jalur pendakian Gunung X ditutup sementara mulai besok.").
-2. Rangkai informasi 5W1H secara mengalir, jangan seperti daftar poin.
-3. Pada tubuh berita, jelaskan dampaknya bagi pendaki: apa yang perlu diwaspadai, disiapkan, atau dijadwalkan ulang.
-4. Di penutup, berikan pesan keselamatan singkat lalu akhiri dengan SATU Call to Action (pilih salah satu: komen, save, share, atau follow).
+STRUKTUR 5 LAPISAN BAKU CAMPERSMAGZ:
+1. JUDUL UTAMA (Max 10-12 kata):
+   - Menggunakan Title Case, lugas, jujur, punya daya tarik jurnalistik yang kuat tanpa clickbait murahan.
+   - Sediakan juga 5 alternatif judul dengan sudut pandang (hook) berbeda.
+2. TERAS BERITA (Paragraf 1 — Lead):
+   - 1 hingga 2 kalimat padat yang langsung masuk ke inti peristiwa (5W1H utama) di kalimat pertama.
+   - DILARANG membuka dengan sapaan ("Halo sobat pendaki", "Kabar duka datang dari", dll.). Langsung ke subjek dan peristiwa!
+3. TUBUH BERITA (Paragraf 2 — Detail & Dampak Pendaki):
+   - Rangkai rincian fakta, kronologi singkat, atau keterangan pihak berwenang secara mengalir (bukan daftar poin).
+   - Jelaskan relevansi atau dampak nyatanya bagi pendaki (misal: penutupan jalur, syarat dokumen yang wajib disiapkan, potensi cuaca yang harus diantisipasi, atau penjadwalan ulang).
+4. PENUTUP REFLEKTIF & 1 CTA (Paragraf 3 — Punchline & Ajakan):
+   - Awali dengan 1–2 kalimat refleksi keselamatan atau etika pendakian yang berbobot namun hangat (seperti pengingat antar-teman satu tim, tidak menggurui/menghakimi).
+   - Langsung tutup paragraf ini dengan TEPAT SATU kalimat Call to Action (CTA) yang menyatu alami sesuai instruksi (Save / Share / Komen / Follow).
+5. SUMBER:
+   - Nama media resmi asal berita secara bersih (contoh: Kompas.com, Detik.com, Antara News, Balai TNGR).
 
-GAYA DILARANG:
-- Frasa kaku: "Dilansir dari", "Berdasarkan informasi yang dihimpun", "Diketahui bahwa", "senantiasa", "dihimbau", "dikarenakan".
-- Kata obrolan/gaul: "nih", "sih", "lho", "deh", "banget", "nggak", "gimana", "guys".
-- Tanda AI: Pembuka klise ("Halo sobat pendaki"), pola "Bukan hanya X, tapi juga Y", tanda pisah panjang (—), huruf kapital semua, bullet point, dan emoji berlebihan (maksimal 2 emoji relevan seperti ⛰️ atau 🥾).
+DAFTAR KATA & POLA TERLARANG (HARAM DIGUNAKAN):
+- Kata kaku/birokratis/klise pers: "Dilansir dari", "Berdasarkan informasi yang dihimpun", "Diketahui bahwa", "Sebagaimana diketahui", "dihimbau" (gunakan: diimbau), "dikarenakan" (gunakan: karena), "senantiasa", "pihak terkait menghimbau".
+- Kata gaul/obrolan: "nih", "sih", "lho", "deh", "banget", "nggak", "gimana", "guys", "bro", "bestie".
+- Pola khas AI terjemahan: "Bukan hanya X, tetapi juga Y", "Di tengah...", tanda pisah panjang (—), bullet points, penomoran, atau emoji berlebihan (cukup maksimal 1-2 emoji relevan jika diperlukan).
 """
+
+CTA_INSTRUCTIONS = {
+    "otomatis": "Pilih SATU jenis CTA yang paling pas dengan konteks berita (Save untuk info jalur/aturan, Share untuk peringatan/kondisi darurat, Komen untuk diskusi pengalaman, atau Follow untuk update lanjutan).",
+    "save": "Gunakan CTA 'Save': ajak pembaca menyimpan unggahan ini sebagai bekal persiapan sebelum mendaki.",
+    "share": "Gunakan CTA 'Share': ajak pembaca membagikan kabar ini ke rekan satu tim atau grup pendakian.",
+    "komen": "Gunakan CTA 'Komen': ajak pembaca berbagi pandangan atau pengalaman serupa di kolom komentar secara santun.",
+    "follow": "Gunakan CTA 'Follow': ajak pembaca mengikuti @campersmagz agar tidak tertinggal informasi pendakian terbaru."
+}
+
+def sanitize_campersmagz_text(text: str) -> str:
+    if not text:
+        return ""
+    replacements = [
+        (r"\bdihimbau\b", "diimbau"),
+        (r"\bDihimbau\b", "Diimbau"),
+        (r"\bmenghimbau\b", "mengimbau"),
+        (r"\bMenghimbau\b", "Mengimbau"),
+        (r"\bhimbauan\b", "imbauan"),
+        (r"\bHimbauan\b", "Imbauan"),
+        (r"\bdikarenakan\b", "karena"),
+        (r"\bDikarenakan\b", "Karena"),
+        (r"\bsenantiasa\b", "selalu"),
+        (r"\bSenantiasa\b", "Selalu"),
+        (r"^Dilansir dari [^,]+,\s*", ""),
+        (r"^Berdasarkan informasi yang dihimpun,\s*", ""),
+        (r"^Diketahui bahwa\s*", ""),
+        (r"—", " - ")
+    ]
+    cleaned = text
+    for pattern, repl in replacements:
+        cleaned = re.sub(pattern, repl, cleaned)
+    return cleaned.strip()
 
 def extract_clean_json(raw_text):
     cleaned = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
@@ -391,17 +458,38 @@ def extract_clean_json(raw_text):
     return json.loads(cleaned)
 
 def generate_converter_content(article):
-    summary_cut = re.sub(r"<[^>]+>", "", article.get("summary", ""))[:450]
-    user_txt = f"Bahan Berita:\nJudul: {article.title}\nRingkasan: {summary_cut}"
-    error_logs = []
+    raw_title = article.title
+    source_hint = "Media Resmi"
+    if " - " in raw_title:
+        parts = raw_title.rsplit(" - ", 1)
+        clean_t = parts[0].strip()
+        source_hint = parts[1].strip()
+    else:
+        clean_t = raw_title
+
+    summary_rss = re.sub(r"<[^>]+>", "", article.get("summary", "")).strip()
+    full_body = state.get("full_article_text", "").strip()
+    combined_material = full_body if len(full_body) > 150 else summary_rss
+
+    cta_mode = state.get("cta_choice", "otomatis")
+    cta_prompt = CTA_INSTRUCTIONS.get(cta_mode, CTA_INSTRUCTIONS["otomatis"])
+
+    user_txt = (
+        f"Judul Asli: {clean_t}\n"
+        f"Media Sumber: {source_hint}\n"
+        f"Isi Berita Lengkap:\n{combined_material}\n\n"
+        f"Instruksi CTA Penutup: {cta_prompt}"
+    )
 
     mood_desc = (
-        "PILIH SALAH SATU: "
-        "'urgent' (Wajib jika kabar orang hilang, kecelakaan, tersesat, evakuasi SAR, pelanggaran blacklist, kebakaran, atau cuaca ekstrem), "
-        "'somber' (Untuk kabar duka cita, korban jiwa, atau kesedihan mendalam), "
-        "'upbeat' (Untuk jalur baru dibuka kembali, kuota ditambah, kabar gembira), "
-        "'chill' (Untuk edukasi keselamatan, cuaca normal, keindahan alam, tips regulasi)"
+        "PILIH SALAH SATU SESUAI SUASANA BERITA: "
+        "'urgent' (Untuk berita orang hilang, SAR, pendaki tersesat, erupsi, kebakaran, pelanggaran berat/blacklist, cuaca ekstrem), "
+        "'somber' (Untuk berita pendaki meninggal dunia, duka cita, tragedi), "
+        "'upbeat' (Untuk berita jalur pendakian dibuka kembali, penyelamatan berhasil, prestasi, kabar positif), "
+        "'chill' (Untuk informasi regulasi umum, edukasi persiapan, tips peralatan, wisata alam)"
     )
+
+    error_logs = []
 
     if GEMINI_API_KEY:
         for gem_model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]:
@@ -411,7 +499,7 @@ def generate_converter_content(article):
                     "contents": [{"parts": [{"text": user_txt}]}],
                     "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
                     "generationConfig": {
-                        "temperature": 0.35,
+                        "temperature": 0.3,
                         "responseMimeType": "application/json",
                         "responseSchema": {
                             "type": "OBJECT",
@@ -426,16 +514,14 @@ def generate_converter_content(article):
                                 "sumber": {"type": "STRING"},
                                 "mood_musik": {"type": "STRING", "description": mood_desc}
                             },
-                            "required": ["judul", "alternatif_judul", "kata_kunci_utama", "frasa_tebal", "teras", "tubuh_berita", "penutup", "mood_musik"]
+                            "required": ["judul", "alternatif_judul", "kata_kunci_utama", "frasa_tebal", "teras", "tubuh_berita", "penutup", "sumber", "mood_musik"]
                         }
                     }
                 }
-                r = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=20)
+                r = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=25)
                 if r.status_code == 200:
                     data = extract_clean_json(r.json()["candidates"][0]["content"]["parts"][0]["text"])
-                    data["opsi_judul"] = [data["judul"]] + [x for x in data.get("alternatif_judul", []) if x != data["judul"]]
-                    data["sumber_media"] = data.get("sumber") or "Media"
-                    return data
+                    return finalize_converter_data(data, source_hint)
                 error_logs.append(f"{gem_model}({r.status_code})")
             except Exception as e:
                 error_logs.append(f"{gem_model}Err({str(e)[:25]})")
@@ -446,13 +532,13 @@ def generate_converter_content(article):
             groq_prompt = (
                 f"{SYSTEM_PROMPT}\n\nHasilkan output HANYA JSON murni dengan format:\n"
                 "{\n"
-                '  "judul": "Judul utama cover/caption maksimal 10 kata, title case, sopan, dan jujur.",\n'
-                '  "alternatif_judul": ["Opsi 1", "Opsi 2", "Opsi 3", "Opsi 4", "Opsi 5"],\n'
+                '  "judul": "Judul utama cover/caption maksimal 10 kata, Title Case, lugas, sopan, dan jujur.",\n'
+                '  "alternatif_judul": ["Alternatif 1", "Alternatif 2", "Alternatif 3", "Alternatif 4", "Alternatif 5"],\n'
                 '  "kata_kunci_utama": "1-2 kata nama gunung/topik murni TANPA kata Gunung/Gn",\n'
-                '  "frasa_tebal": "2-3 kata di dalam judul yang paling penting",\n'
-                '  "teras": "Lead 1-2 kalimat langsung inti kabar 5W1H tanpa basa-basi",\n'
-                '  "tubuh_berita": "Rincian fakta sumber + dampak nyata bagi pendaki",\n'
-                '  "penutup": "Pesan keselamatan singkat diakhiri SATU CTA",\n'
+                '  "frasa_tebal": "2-3 kata kunci di dalam judul yang paling penting",\n'
+                '  "teras": "Paragraf 1: Lead 1-2 kalimat langsung inti kabar 5W1H tanpa basa-basi",\n'
+                '  "tubuh_berita": "Paragraf 2: Rincian fakta kronologi + dampak nyata bagi pendaki",\n'
+                '  "penutup": "Paragraf 3: Pesan keselamatan hangat + ditutup tepat SATU kalimat CTA",\n'
                 '  "sumber": "Nama media resmi sumber berita",\n'
                 f'  "mood_musik": "{mood_desc}"\n'
                 "}"
@@ -463,15 +549,13 @@ def generate_converter_content(article):
                     {"role": "system", "content": groq_prompt},
                     {"role": "user", "content": user_txt + "\n/no_think"}
                 ],
-                "max_tokens": 950,
-                "temperature": 0.35
+                "max_tokens": 1100,
+                "temperature": 0.3
             }
-            r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=20)
+            r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=25)
             if r.status_code == 200:
                 data = extract_clean_json(r.json()["choices"][0]["message"]["content"])
-                data["opsi_judul"] = [data["judul"]] + [x for x in data.get("alternatif_judul", []) if x != data["judul"]]
-                data["sumber_media"] = data.get("sumber") or "Media"
-                return data
+                return finalize_converter_data(data, source_hint)
             error_logs.append(f"Groq({r.status_code})")
         except Exception as e:
             error_logs.append(f"GroqErr({str(e)[:30]})")
@@ -490,19 +574,31 @@ def generate_converter_content(article):
                         {"role": "system", "content": gh_prompt},
                         {"role": "user", "content": user_txt}
                     ],
-                    "temperature": 0.35
+                    "temperature": 0.3
                 }
-                r = requests.post(gh_url, headers=headers, json=payload, timeout=15)
+                r = requests.post(gh_url, headers=headers, json=payload, timeout=20)
                 if r.status_code == 200:
                     data = extract_clean_json(r.json()["choices"][0]["message"]["content"])
-                    data["opsi_judul"] = [data["judul"]] + [x for x in data.get("alternatif_judul", []) if x != data["judul"]]
-                    data["sumber_media"] = data.get("sumber") or "Media"
-                    return data
+                    return finalize_converter_data(data, source_hint)
                 error_logs.append(f"GH({r.status_code})")
             except Exception as e:
                 error_logs.append(f"GHErr({str(e)[:25]})")
 
     raise RuntimeError(f"Semua AI gagal: {' | '.join(error_logs)}")
+
+def finalize_converter_data(data, source_hint):
+    data["judul"] = sanitize_campersmagz_text(data.get("judul", ""))
+    alt_clean = [sanitize_campersmagz_text(x) for x in data.get("alternatif_judul", []) if x]
+    data["opsi_judul"] = [data["judul"]] + [x for x in alt_clean if x != data["judul"]]
+    data["teras"] = sanitize_campersmagz_text(data.get("teras", ""))
+    data["tubuh_berita"] = sanitize_campersmagz_text(data.get("tubuh_berita", ""))
+    data["penutup"] = sanitize_campersmagz_text(data.get("penutup", ""))
+    sumber_raw = data.get("sumber", "").strip()
+    if not sumber_raw or sumber_raw.lower() in ["tidak dicantumkan", "media", "sumber resmi terkait"]:
+        sumber_raw = source_hint
+    data["sumber"] = sumber_raw
+    data["sumber_media"] = sumber_raw
+    return data
 
 def build_full_article_text():
     d = state["converter_data"]
@@ -1078,192 +1174,185 @@ def create_video_overlays(custom_source=None):
     return path_logos, path_title
 
 # ==========================================
-# 7. ENGINE MUSIK INSTRUMENTAL ANTI-GAGAL (CDN + PYTHON MULTI-INSTRUMENT SYNTH)
+# 7. ENGINE MUSIK INSTRUMENTAL JURNALISTIK & DOKUMENTER (MULTI-VARIASI & BISA REGENERATE)
 # ==========================================
-# Menggunakan URL CDN publik yang mengizinkan akses langsung dari GitHub Actions
-CAPCUT_MUSIC_LIBRARY = {
-    "urgent": [
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-7.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-15.mp3"
-    ],
-    "somber": [
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-9.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-12.mp3"
-    ],
-    "upbeat": [
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-6.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-10.mp3"
-    ],
-    "chill": [
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-14.mp3"
-    ]
-}
-
-def generate_cinematic_wav_python(mood="chill", duration=6, out_wav="synth_ fallback.wav"):
+def generate_editorial_news_score_wav(mood="chill", duration=6, out_wav="news_score.wav"):
     """
-    Generator Multi-Instrumen Murni di Python (100% Bebas Error FFmpeg lavfi/aevalsrc):
-    - Menggabungkan 4 instrumen: Bass Drone, Percussion/Heartbeat Kick, Arpeggio Piano/Pluck, dan Strings Pad.
-    - Menerapkan kurva dinamika dramatis: Awal Pelan (0-1.8s) -> Puncak Menghentak di Tengah (1.8-4.4s) -> Akhir Mereda (4.4-6.0s).
+    Komposer Musik Berita & Dokumenter Sinematik (Gaya BBC News / National Geographic / Vice):
+    - Dirancang menghasilkan kombinasi progresi akor, oktaf, tempo pulse, dan pola arpeggio baru
+      setiap kali tombol 'Generate Musik Lain' ditekan.
     """
     sample_rate = 44100
     num_samples = int(sample_rate * duration)
 
-    if mood == "urgent":
-        # Nada D-minor Tegang: Heartbeat cepat + Sub-bass + Suspense Arpeggio
-        chords = [146.83, 174.61, 220.00, 293.66]
-        bass_freq = 73.42
-        beat_bpm = 135.0
-    elif mood == "somber":
-        # Nada A-minor Khidmat/Duka: Cello dalam + Piano lambat
-        chords = [110.00, 130.81, 164.81, 220.00]
-        bass_freq = 55.00
-        beat_bpm = 72.0
-    elif mood == "upbeat":
-        # Nada C-major Energik: Ketukan cepat + Akor Cerah
-        chords = [261.63, 329.63, 392.00, 523.25]
-        bass_freq = 130.81
-        beat_bpm = 124.0
-    else:
-        # Nada F-major7 Chill/Alam: Akor hangat + Petikan akustik
-        chords = [174.61, 220.00, 261.63, 329.63]
-        bass_freq = 87.31
-        beat_bpm = 96.0
+    variant = random.randint(0, 3)
+    octave_shift = random.choice([0.85, 1.0, 1.12, 1.25])
+    arp_direction = random.choice([1, -1, 2])
 
-    beat_period = 60.0 / beat_bpm
-    arp_period = beat_period / 2.0
+    if mood == "urgent":
+        progressions = [
+            [(73.42, [146.83, 220.00, 293.66, 349.23]), (58.27, [116.54, 174.61, 220.00, 293.66]), (98.00, [196.00, 293.66, 349.23, 440.00])],
+            [(65.41, [130.81, 196.00, 261.63, 311.13]), (51.91, [103.83, 155.56, 207.65, 261.63]), (87.31, [174.61, 261.63, 311.13, 392.00])],
+            [(82.41, [164.81, 246.94, 329.63, 392.00]), (65.41, [130.81, 196.00, 246.94, 329.63]), (61.74, [123.47, 185.00, 246.94, 370.00])],
+            [(55.00, [110.00, 164.81, 220.00, 261.63]), (61.74, [123.47, 174.61, 246.94, 329.63]), (73.42, [146.83, 220.00, 293.66, 349.23])]
+        ]
+        prog = progressions[variant]
+        pulse_hz = random.choice([3.5, 4.0, 4.5, 5.0])
+
+    elif mood == "somber":
+        progressions = [
+            [(55.00, [110.00, 164.81, 220.00, 261.63]), (43.65, [87.31, 130.81, 174.61, 246.94]), (73.42, [146.83, 220.00, 261.63, 329.63])],
+            [(41.20, [82.41, 123.47, 164.81, 196.00]), (65.41, [130.81, 196.00, 246.94, 329.63]), (55.00, [110.00, 164.81, 220.00, 261.63])],
+            [(73.42, [146.83, 174.61, 220.00, 293.66]), (58.27, [116.54, 174.61, 220.00, 261.63]), (55.00, [110.00, 164.81, 207.65, 277.18])],
+            [(65.41, [130.81, 155.56, 196.00, 261.63]), (51.91, [103.83, 155.56, 196.00, 246.94]), (43.65, [87.31, 130.81, 174.61, 207.65])]
+        ]
+        prog = progressions[variant]
+        pulse_hz = random.choice([0.0, 1.0])
+
+    elif mood == "upbeat":
+        progressions = [
+            [(65.41, [130.81, 196.00, 261.63, 329.63]), (49.00, [98.00, 146.83, 196.00, 246.94]), (43.65, [87.31, 130.81, 174.61, 220.00])],
+            [(73.42, [146.83, 220.00, 293.66, 369.99]), (55.00, [110.00, 164.81, 220.00, 277.18]), (49.00, [98.00, 146.83, 196.00, 246.94])],
+            [(58.27, [116.54, 174.61, 233.08, 293.66]), (43.65, [87.31, 130.81, 174.61, 220.00]), (77.78, [155.56, 233.08, 311.13, 392.00])],
+            [(82.41, [164.81, 246.94, 329.63, 415.30]), (61.74, [123.47, 185.00, 246.94, 311.13]), (55.00, [110.00, 164.81, 220.00, 277.18])]
+        ]
+        prog = progressions[variant]
+        pulse_hz = random.choice([2.0, 2.5, 3.0])
+
+    else:
+        progressions = [
+            [(43.65, [87.31, 130.81, 174.61, 246.94]), (65.41, [130.81, 196.00, 246.94, 329.63]), (49.00, [98.00, 146.83, 196.00, 246.94])],
+            [(77.78, [155.56, 233.08, 311.13, 392.00]), (58.27, [116.54, 174.61, 233.08, 293.66]), (43.65, [87.31, 130.81, 174.61, 233.08])],
+            [(55.00, [110.00, 164.81, 196.00, 246.94]), (73.42, [146.83, 220.00, 261.63, 329.63]), (65.41, [130.81, 196.00, 246.94, 293.66])],
+            [(49.00, [98.00, 146.83, 185.00, 246.94]), (65.41, [130.81, 196.00, 246.94, 329.63]), (55.00, [110.00, 164.81, 220.00, 261.63])]
+        ]
+        prog = progressions[variant]
+        pulse_hz = random.choice([1.2, 1.5, 2.0])
 
     with wave.open(out_wav, "w") as wf:
-        wf.setnchannels(1)
+        wf.setnchannels(2)
         wf.setsampwidth(2)
         wf.setframerate(sample_rate)
 
         frames = bytearray()
         for i in range(num_samples):
             t = i / float(sample_rate)
+            stage_idx = min(2, int(t / 2.0))
+            bass_f, chord_notes = prog[stage_idx]
 
-            # Kurva Dinamika: Awal pelan (0.45) -> Puncak tengah kencang (1.0) -> Akhir mereda (0.15)
-            if t < 1.8:
-                dyn_env = 0.40 + 0.60 * (t / 1.8)
-            elif t <= 4.4:
-                dyn_env = 1.00
+            if t < 1.5:
+                dyn_env = 0.35 + 0.65 * (t / 1.5)
+            elif t <= 4.3:
+                mid_boost = 1.0 + 0.25 * math.sin(math.pi * (t - 1.5) / 2.8)
+                dyn_env = min(1.20, mid_boost)
             else:
-                dyn_env = max(0.10, 1.00 - 0.85 * ((t - 4.4) / 1.6))
+                dyn_env = max(0.05, 1.0 - 0.95 * ((t - 4.3) / 1.7))
 
-            # Instrumen 1: Warm Cello / Bass Pad (Fundamental + Harmonik)
-            bass = 0.28 * math.sin(2.0 * math.pi * bass_freq * t) + 0.12 * math.sin(2.0 * math.pi * (bass_freq * 2.0) * t)
-
-            # Instrumen 2: Taiko / Heartbeat Kick Drum (Frequency sweep)
-            beat_phase = t % beat_period
-            kick_freq = 115.0 * math.exp(-18.0 * beat_phase) + 42.0
-            kick_env = math.exp(-7.5 * beat_phase)
-            kick = 0.42 * math.sin(2.0 * math.pi * kick_freq * beat_phase) * kick_env
-
-            # Instrumen 3: Piano / Acoustic Pluck Arpeggio (Berganti nada setiap setengah ketukan)
-            arp_idx = int(t / arp_period) % len(chords)
-            arp_phase = t % arp_period
-            note_freq = chords[arp_idx]
-            pluck_env = math.exp(-5.5 * arp_phase)
-            pluck = (
-                0.26 * math.sin(2.0 * math.pi * note_freq * t)
-                + 0.10 * math.sin(2.0 * math.pi * (note_freq * 2.0) * t)
-            ) * pluck_env
-
-            # Instrumen 4: Cinematic String Swell (Khusus menguat di bagian tengah)
-            swell = 0.16 * (
-                math.sin(2.0 * math.pi * chords[0] * t)
-                + math.sin(2.0 * math.pi * chords[2] * t)
+            vibrato = 1.0 + 0.002 * math.sin(2.0 * math.pi * 5.2 * t)
+            cello = (
+                0.24 * math.sin(2.0 * math.pi * bass_f * t)
+                + 0.12 * math.sin(2.0 * math.pi * (bass_f * 2.0) * t)
+                + 0.06 * math.sin(2.0 * math.pi * (bass_f * 3.0) * t)
             )
 
-            sample_val = (bass + kick + pluck + swell) * dyn_env
-            sample_val = max(-0.98, min(0.98, sample_val))
-            frames.extend(struct.pack("<h", int(sample_val * 32767)))
+            pad_left = 0.0
+            pad_right = 0.0
+            for idx_n, nf in enumerate(chord_notes):
+                tremolo = (1.0 + 0.25 * math.sin(2.0 * math.pi * 11.0 * t)) if (mood == "urgent" and 1.5 <= t <= 4.5) else 1.0
+                voice = (
+                    0.11 * math.sin(2.0 * math.pi * (nf * octave_shift) * vibrato * t)
+                    + 0.04 * math.sin(2.0 * math.pi * (nf * octave_shift * 2.0) * t)
+                ) * tremolo
+                if idx_n % 2 == 0:
+                    pad_left += voice
+                    pad_right += voice * 0.7
+                else:
+                    pad_left += voice * 0.7
+                    pad_right += voice
+
+            local_t = t % 2.0
+            piano_env = math.exp(-2.2 * local_t) * (1.0 - math.exp(-40.0 * local_t))
+            melody_note = chord_notes[(stage_idx * arp_direction) % len(chord_notes)] * 2.0 * octave_shift
+            piano = (
+                0.22 * math.sin(2.0 * math.pi * melody_note * t)
+                + 0.09 * math.sin(2.0 * math.pi * (melody_note * 2.0) * t) * math.exp(-4.0 * local_t)
+                + 0.04 * math.sin(2.0 * math.pi * (melody_note * 3.0) * t) * math.exp(-6.0 * local_t)
+            ) * piano_env
+
+            pulse_val = 0.0
+            if pulse_hz > 0:
+                p_period = 1.0 / pulse_hz
+                p_phase = t % p_period
+                p_idx = (int(t / p_period) * arp_direction) % len(chord_notes)
+                p_freq = chord_notes[p_idx] * octave_shift
+                mid_pulse_weight = 1.2 if (1.4 <= t <= 4.4) else 0.5
+                p_env = math.exp(-10.0 * p_phase) * mid_pulse_weight
+                pulse_val = 0.18 * math.sin(2.0 * math.pi * p_freq * t) * p_env
+
+            timpani = 0.0
+            if 1.7 <= t <= 3.2:
+                t_dt = t - 1.7
+                timpani_env = math.exp(-3.0 * t_dt)
+                timpani_freq = 68.0 * math.exp(-4.0 * t_dt) + 45.0
+                timpani = 0.30 * math.sin(2.0 * math.pi * timpani_freq * t_dt) * timpani_env
+
+            left_ch = (cello + pad_left + piano + pulse_val + timpani) * dyn_env
+            right_ch = (cello + pad_right + piano * 0.9 + pulse_val + timpani) * dyn_env
+
+            left_ch = max(-0.98, min(0.98, left_ch))
+            right_ch = max(-0.98, min(0.98, right_ch))
+
+            frames.extend(struct.pack("<hh", int(left_ch * 32767), int(right_ch * 32767)))
 
         wf.writeframes(frames)
     return out_wav
 
-def prepare_mood_audio(mood="chill", duration=6):
-    """
-    Menyiapkan musik latar instrumen asli dengan kurva dinamika sinematik dan anti-error FFmpeg:
-    1. Cek file MP3 lokal di repo.
-    2. Jika tidak ada, unduh lagu instrumen dari CDN SoundHelix (diambil pada detik ke-25 saat seluruh instrumen aktif).
-    3. Jika CDN terputus, gunakan Python Multi-Instrument Synthesizer (generate_cinematic_wav_python).
-    """
+def prepare_mood_audio(mood="chill", duration=6, force_new=False):
     mood = str(mood).lower().strip() if mood else "chill"
     if mood not in ["urgent", "somber", "upbeat", "chill"]:
         mood = "chill"
 
-    raw_audio = f"raw_{mood}.mp3"
-    processed_audio = f"ready_{mood}.mp3"
+    state["music_gen_count"] = state.get("music_gen_count", 0) + 1
+    gen_idx = state["music_gen_count"]
+    processed_audio = f"ready_{mood}_{gen_idx}.mp3"
 
+    # Gunakan file lokal jika ada dan user tidak sedang meminta generate variasi baru
     local_candidates = [f for f in os.listdir(".") if f.lower().startswith(f"bgm_{mood}") and f.lower().endswith(".mp3")]
-    has_source = False
-
-    if local_candidates:
+    if local_candidates and not force_new:
         raw_audio = random.choice(local_candidates)
-        has_source = True
-    elif os.path.exists("bgm.mp3"):
-        raw_audio = "bgm.mp3"
-        has_source = True
-    else:
-        urls = list(CAPCUT_MUSIC_LIBRARY.get(mood, CAPCUT_MUSIC_LIBRARY["chill"]))
-        random.shuffle(urls)
-        headers = {"User-Agent": "Mozilla/5.0"}
-        for u in urls:
-            try:
-                r = requests.get(u, headers=headers, timeout=15)
-                if r.status_code == 200 and len(r.content) > 50000:
-                    with open(raw_audio, "wb") as f:
-                        f.write(r.content)
-                    has_source = True
-                    print(f"Musik studio ({mood}) berhasil diunduh: {u}")
-                    break
-            except Exception as e:
-                print(f"Skip URL {u}: {e}")
-
-    # Jika berhasil dapat MP3 studio, potong bagian klimaks (detik 25) dan beri efek fade-in & fade-out + loudnorm
-    if has_source:
-        af_simple = "afade=t=in:st=0:d=1.2,afade=t=out:st=4.6:d=1.4,loudnorm=I=-14:TP=-1.0:LRA=11,volume=1.3"
-        cmd_master = [
-            "ffmpeg", "-y", "-ss", "25", "-t", str(duration), "-i", raw_audio,
-            "-af", af_simple,
-            processed_audio
-        ]
-        res = subprocess.run(cmd_master)
+        af_simple = "afade=t=in:st=0:d=1.2,afade=t=out:st=4.6:d=1.4,loudnorm=I=-14:TP=-1.0:LRA=11"
+        res = subprocess.run(["ffmpeg", "-y", "-ss", "0", "-t", str(duration), "-i", raw_audio, "-af", af_simple, processed_audio])
         if res.returncode == 0 and os.path.exists(processed_audio):
+            state["approved_bgm_path"] = processed_audio
             return processed_audio
 
-        # Jika durasi file lokal < 25 detik, potong dari detik 0
-        res_zero = subprocess.run([
-            "ffmpeg", "-y", "-ss", "0", "-t", str(duration), "-i", raw_audio,
-            "-af", af_simple,
-            processed_audio
-        ])
-        if res_zero.returncode == 0 and os.path.exists(processed_audio):
-            return processed_audio
-
-    # Fallback Anti-Gagal: Buat WAV Multi-Instrumen dengan Python, lalu konversi ke MP3
-    wav_file = f"synth_{mood}.wav"
-    generate_cinematic_wav_python(mood=mood, duration=duration, out_wav=wav_file)
+    wav_file = f"news_score_{mood}_{gen_idx}.wav"
+    generate_editorial_news_score_wav(mood=mood, duration=duration, out_wav=wav_file)
     subprocess.run([
         "ffmpeg", "-y", "-i", wav_file,
         "-af", "loudnorm=I=-14:TP=-1.0:LRA=11",
         processed_audio
     ], check=True)
+    state["approved_bgm_path"] = processed_audio
     return processed_audio
 
-def render_final_video(mode="pan_image", add_instrumental=True):
+def render_final_video(mode="pan_image", add_instrumental=True, bgm_override_path=None):
     c_src = state["custom_source_text"] if mode == "user_video" else None
     overlay_logos, overlay_title = create_video_overlays(custom_source=c_src)
     output_mp4 = "final_campersmagz_reel.mp4"
     mood_b = state["converter_data"].get("mood_musik") or "chill"
-    bgm_p = prepare_mood_audio(mood=mood_b, duration=6) if add_instrumental else None
-    has_bgm = (bgm_p is not None and os.path.exists(bgm_p))
 
+    if add_instrumental:
+        if bgm_override_path and os.path.exists(bgm_override_path):
+            bgm_p = bgm_override_path
+        elif state.get("approved_bgm_path") and os.path.exists(state["approved_bgm_path"]):
+            bgm_p = state["approved_bgm_path"]
+        else:
+            bgm_p = prepare_mood_audio(mood=mood_b, duration=6)
+    else:
+        bgm_p = None
+
+    has_bgm = (bgm_p is not None and os.path.exists(bgm_p))
     filter_fade_title = "[2:v]format=rgba,fade=t=in:st=0:d=0.8:alpha=1[title_faded]"
 
     if mode == "pan_image":
@@ -1303,12 +1392,11 @@ def render_final_video(mode="pan_image", add_instrumental=True):
             "-loop", "1", "-t", "6", "-i", overlay_title
         ]
         if has_bgm:
-            bgm_act = prepare_mood_audio(mood=mood_b, duration=6)
-            cmd += ["-i", bgm_act]
+            cmd += ["-i", bgm_p]
             if vid_has_a:
                 fc = (
                     f"{vf};"
-                    "[0:a]volume=0.7,afade=t=out:st=4.8:d=1.2[orig_a];"
+                    "[0:a]volume=0.65,afade=t=out:st=4.8:d=1.2[orig_a];"
                     "[3:a]volume=1.0[bgm];"
                     "[orig_a][bgm]amix=inputs=2:duration=first:dropout_transition=0,volume=1.4[outa]"
                 )
@@ -1333,7 +1421,7 @@ def render_final_video(mode="pan_image", add_instrumental=True):
     return output_mp4
 
 # ==========================================
-# 8. HANDLER INTERAKTIF TELEGRAM (5 FORMAT COVER + PROTEKSI PENUH)
+# 8. HANDLER INTERAKTIF TELEGRAM (DILENGKAPI PREVIEW & REGENERATE MUSIK)
 # ==========================================
 def send_news_candidate():
     if state["current_idx"] >= len(state["articles"]):
@@ -1365,7 +1453,7 @@ def send_cover_preview(cover_path):
     cap_txt = (
         f"📌 *Preview Cover CampersMagz*\n"
         f"📐 Format Aktif: `{cur_style_name}`\n"
-        f"🎵 Musik Instrumental: `{mood_t}`"
+        f"🎵 Suasana Musik Berita: `{mood_t}`"
     )
     with open(cover_path, "rb") as ph:
         bot.send_photo(TELEGRAM_CHAT_ID, ph, caption=cap_txt, parse_mode="Markdown", reply_markup=markup)
@@ -1417,10 +1505,55 @@ def send_caption_review():
     cap = build_full_article_text()
     markup = InlineKeyboardMarkup()
     markup.row(
-        InlineKeyboardButton("✅ Pilih Caption Ini", callback_data="cap_keep"),
-        InlineKeyboardButton("🔄 Generate Caption Lain", callback_data="cap_regen")
+        InlineKeyboardButton("✅ Kunci Caption Ini", callback_data="cap_keep"),
+        InlineKeyboardButton("🔄 Tulis Ulang Caption", callback_data="cap_regen")
     )
-    bot.send_message(TELEGRAM_CHAT_ID, f"📝 REVIEW CAPTION RESMI CAMPERSMAGZ:\n\n{cap}", reply_markup=markup)
+    markup.row(
+        InlineKeyboardButton("📌 CTA: Save", callback_data="setcta_save"),
+        InlineKeyboardButton("📤 CTA: Share", callback_data="setcta_share"),
+        InlineKeyboardButton("💬 CTA: Komen", callback_data="setcta_komen"),
+        InlineKeyboardButton("➕ CTA: Follow", callback_data="setcta_follow")
+    )
+    bot.send_message(TELEGRAM_CHAT_ID, f"📝 REVIEW CAPTION (STANDAR CAMPERSMAGZ - NEWS CONVERTER):\n\n{cap}", reply_markup=markup)
+
+def generate_and_send_music_preview(force_new=False):
+    """Membuat preview musik 6 detik dan mengirimkannya ke Telegram sebelum render video"""
+    mood_raw = state["converter_data"].get("mood_musik") or "chill"
+    mood_str = str(mood_raw).lower().strip()
+    bgm_file = prepare_mood_audio(mood=mood_str, duration=6, force_new=force_new)
+
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("✅ Setuju & Render Video Sekarang", callback_data="music_approve"))
+    markup.add(InlineKeyboardButton("🔄 Generate Musik Lain (Variasi Baru)", callback_data="music_regen"))
+    markup.row(
+        InlineKeyboardButton("🚨 Urgent", callback_data="setmood_urgent"),
+        InlineKeyboardButton("🕯️ Somber", callback_data="setmood_somber"),
+        InlineKeyboardButton("🌤️ Upbeat", callback_data="setmood_upbeat"),
+        InlineKeyboardButton("🌲 Chill", callback_data="setmood_chill")
+    )
+    if state.get("video_mode") == "user_video":
+        markup.add(InlineKeyboardButton("🔊 Batal & Gunakan Audio Asli Video", callback_data="bgm_no"))
+    else:
+        markup.add(InlineKeyboardButton("🔇 Render Video Tanpa Musik", callback_data="music_mute"))
+
+    gen_no = state.get("music_gen_count", 1)
+    mode_lbl = "Video Pan 6 Detik" if state.get("video_mode") == "pan_image" else "Video Unggahan Anda"
+    cap = (
+        f"🎧 *PREVIEW MUSIK INSTRUMENTAL #{gen_no}*\n"
+        f"🎵 Suasana: `{mood_str.upper()}`\n"
+        f"🎬 Target: `{mode_lbl}`\n\n"
+        f"Silakan dengarkan terlebih dahulu. Jika belum pas, klik *Generate Musik Lain* atau ganti suasananya:"
+    )
+    with open(bgm_file, "rb") as aud:
+        bot.send_audio(
+            TELEGRAM_CHAT_ID,
+            aud,
+            caption=cap,
+            parse_mode="Markdown",
+            title=f"CampersMagz {mood_str.upper()} #{gen_no}",
+            performer="CampersMagz Editorial Score",
+            reply_markup=markup
+        )
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
@@ -1431,13 +1564,15 @@ def handle_callbacks(call):
             bot.answer_callback_query(call.id, "Mencari berita lain...")
             send_news_candidate()
         elif data == "news_accept":
-            bot.answer_callback_query(call.id, "Memproses draf...")
-            safe_send_message(TELEGRAM_CHAT_ID, "⏳ Mengambil foto asli berita & menyusun Cover...")
-            extract_article_image(state["article"])
+            bot.answer_callback_query(call.id, "Memproses artikel penuh...")
+            safe_send_message(TELEGRAM_CHAT_ID, "⏳ Mengekstrak isi artikel berita lengkap & menyusun draf CampersMagz...")
+            scrape_full_article_and_image(state["article"])
+            state["cta_choice"] = "otomatis"
             state["converter_data"] = generate_converter_content(state["article"])
             state["selected_title"] = state["converter_data"]["opsi_judul"][0]
             state["bold_phrase"] = ""
             state["cover_style"] = "1"
+            state["music_gen_count"] = 0
             cover_path = create_converter_cover()
             send_cover_preview(cover_path)
 
@@ -1545,8 +1680,19 @@ def handle_callbacks(call):
             )
 
         elif data == "cap_regen":
-            bot.answer_callback_query(call.id, "Membuat caption lain...")
+            bot.answer_callback_query(call.id, "Menulis ulang caption...")
+            keep_title = state["selected_title"]
             state["converter_data"] = generate_converter_content(state["article"])
+            state["selected_title"] = keep_title
+            send_caption_review()
+
+        elif data.startswith("setcta_"):
+            chosen_cta = data.split("_")[1]
+            state["cta_choice"] = chosen_cta
+            bot.answer_callback_query(call.id, f"Mengubah CTA ke {chosen_cta.upper()}...")
+            keep_title = state["selected_title"]
+            state["converter_data"] = generate_converter_content(state["article"])
+            state["selected_title"] = keep_title
             send_caption_review()
 
         elif data == "cap_keep":
@@ -1558,26 +1704,63 @@ def handle_callbacks(call):
             )
             safe_send_message(TELEGRAM_CHAT_ID, "🎬 *PILIH OPSI PEMBUATAN VIDEO:*", reply_markup=markup)
 
+        # Opsi 1: Tidak Upload Video -> Generate Musik Dulu Tanpa Langsung Render Video Pan
         elif data == "vid_no_upload":
-            bot.answer_callback_query(call.id, "Merender video 6 detik...")
-            mood_raw = state["converter_data"].get("mood_musik") or "chill"
-            mood = str(mood_raw).upper()
-            safe_send_message(TELEGRAM_CHAT_ID, f"⚙️ Merender video Pan 6 detik + Musik Sinematik ({mood}) Dinamika Tinggi...")
-            mp4 = render_final_video(mode="pan_image", add_instrumental=True)
-            send_final_package(mp4)
+            state["video_mode"] = "pan_image"
+            bot.answer_callback_query(call.id, "Menyiapkan preview musik...")
+            safe_send_message(TELEGRAM_CHAT_ID, "🎼 *Men-generate preview musik instrumental terlebih dahulu sebelum merender video Pan...*")
+            generate_and_send_music_preview(force_new=False)
 
+        # Opsi 2: Upload Video Sendiri
         elif data == "vid_upload":
             state["waiting_for_video_upload"] = True
+            state["video_mode"] = "user_video"
             bot.answer_callback_query(call.id, "Silakan upload video...")
             safe_send_message(TELEGRAM_CHAT_ID, "📤 *Silakan upload video Anda (otomatis di-crop 6 detik awal).* Tulis sumber di Caption.")
 
-        elif data in ["bgm_yes", "bgm_no"]:
-            add_bgm = (data == "bgm_yes")
-            bot.answer_callback_query(call.id, "Mengedit video...")
-            mood_raw = state["converter_data"].get("mood_musik") or "chill"
-            mood = str(mood_raw).upper()
-            safe_send_message(TELEGRAM_CHAT_ID, f"⚙️ Mengedit video 6 detik + Musik Sinematik ({mood}) + Fade In Judul...")
-            mp4 = render_final_video(mode="user_video", add_instrumental=add_bgm)
+        # User memilih ingin menggunakan generate musik instrumental pada video yang diupload
+        elif data == "bgm_yes":
+            state["video_mode"] = "user_video"
+            bot.answer_callback_query(call.id, "Menyiapkan preview musik...")
+            safe_send_message(TELEGRAM_CHAT_ID, "🎼 *Men-generate preview musik instrumental untuk video Anda...*")
+            generate_and_send_music_preview(force_new=False)
+
+        # User memilih tetap menggunakan musik/audio asli dari video yang diupload
+        elif data == "bgm_no":
+            bot.answer_callback_query(call.id, "Menggunakan audio asli video...")
+            safe_send_message(TELEGRAM_CHAT_ID, "⚙️ *Merender video 6 detik dengan mempertahankan suara/musik asli dari video Anda...*")
+            mp4 = render_final_video(mode="user_video", add_instrumental=False)
+            send_final_package(mp4)
+
+        # Tombol Regenerate Musik Lain
+        elif data == "music_regen":
+            bot.answer_callback_query(call.id, "Meracik variasi musik baru...")
+            safe_send_message(TELEGRAM_CHAT_ID, "🔄 *Men-generate komposisi musik instrumental baru...*")
+            generate_and_send_music_preview(force_new=True)
+
+        # Tombol Ganti Mood Musik saat Preview
+        elif data.startswith("setmood_"):
+            new_mood = data.split("_")[1]
+            state["converter_data"]["mood_musik"] = new_mood
+            bot.answer_callback_query(call.id, f"Mood diubah ke {new_mood.upper()}!")
+            safe_send_message(TELEGRAM_CHAT_ID, f"🎭 *Mengubah suasana ke {new_mood.upper()} & men-generate musik baru...*")
+            generate_and_send_music_preview(force_new=True)
+
+        # Tombol Setuju Musik -> Langsung Render Video (Pan / User Video)
+        elif data == "music_approve":
+            bot.answer_callback_query(call.id, "Musik disetujui! Merender video...")
+            v_mode = state.get("video_mode", "pan_image")
+            mood = str(state["converter_data"].get("mood_musik") or "chill").upper()
+            safe_send_message(TELEGRAM_CHAT_ID, f"⚙️ *Musik disetujui! Sedang merender video 6 detik dengan musik ({mood})...*")
+            mp4 = render_final_video(mode=v_mode, add_instrumental=True, bgm_override_path=state.get("approved_bgm_path"))
+            send_final_package(mp4)
+
+        # Tombol Render Tanpa Musik (untuk Pan Image)
+        elif data == "music_mute":
+            bot.answer_callback_query(call.id, "Merender tanpa musik...")
+            v_mode = state.get("video_mode", "pan_image")
+            safe_send_message(TELEGRAM_CHAT_ID, "⚙️ *Merender video 6 detik tanpa musik latar...*")
+            mp4 = render_final_video(mode=v_mode, add_instrumental=False)
             send_final_package(mp4)
 
     except Exception as e:
@@ -1659,16 +1842,23 @@ def handle_user_video(message):
             s_raw = f"Video: {s_raw}"
         state["custom_source_text"] = s_raw
         state["waiting_for_video_upload"] = False
+        state["video_mode"] = "user_video"
 
         mood_raw = state["converter_data"].get("mood_musik") or "chill"
         mood = str(mood_raw).upper()
 
         markup = InlineKeyboardMarkup()
-        markup.row(
-            InlineKeyboardButton(f"🎵 Instrumental ({mood})", callback_data="bgm_yes"),
-            InlineKeyboardButton("🔇 Tanpa Instrumental", callback_data="bgm_no")
+        markup.add(InlineKeyboardButton(f"🎵 Gunakan Generate Musik Instrumental ({mood})", callback_data="bgm_yes"))
+        markup.add(InlineKeyboardButton("🔊 Tetap Gunakan Musik/Audio Asli Video", callback_data="bgm_no"))
+
+        safe_send_message(
+            TELEGRAM_CHAT_ID,
+            "✅ *Video berhasil diterima!*\n\n"
+            "🎶 *Pilih pengaturan musik untuk video Anda:*\n"
+            "• Jika pilih *Generate Musik Instrumental*, Anda akan mendengarkan preview musiknya terlebih dahulu (bisa di-generate ulang sampai cocok).\n"
+            "• Jika pilih *Tetap Gunakan Musik/Audio Asli Video*, video langsung diedit menggunakan suara bawaan video Anda.",
+            reply_markup=markup
         )
-        safe_send_message(TELEGRAM_CHAT_ID, "🎶 *Pilih opsi audio video:*", reply_markup=markup)
 
     except Exception as e:
         print(f"Error handle_user_video: {e}")
