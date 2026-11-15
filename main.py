@@ -60,12 +60,14 @@ state = {
     "final_cover_img": "final_cover.png",
     "waiting_for_cover_upload": False,
     "waiting_for_video_upload": False,
+    "waiting_for_audio_upload": False,
     "waiting_for_custom_title": False,
     "waiting_for_custom_bold": False,
     "uploaded_video_path": "user_video.mp4",
     "video_mode": "pan_image",
     "approved_bgm_path": None,
     "music_gen_count": 0,
+    "used_audio_urls": [],
     "custom_source_text": "",
     "custom_cover_source": "",
     "is_ai_art": False
@@ -1174,163 +1176,263 @@ def create_video_overlays(custom_source=None):
     return path_logos, path_title
 
 # ==========================================
-# 7. ENGINE MUSIK INSTRUMENTAL JURNALISTIK & DOKUMENTER (MULTI-VARIASI & BISA REGENERATE)
+# 7. SISTEM MUSIK INSTRUMENTAL STUDIO ASLI (100% BEBAS DENGUNGAN UFO)
 # ==========================================
-def generate_editorial_news_score_wav(mood="chill", duration=6, out_wav="news_score.wav"):
+def fetch_real_studio_instrumental(mood="chill", out_raw="downloaded_studio.mp3"):
     """
-    Komposer Musik Berita & Dokumenter Sinematik (Gaya BBC News / National Geographic / Vice):
-    - Dirancang menghasilkan kombinasi progresi akor, oktaf, tempo pulse, dan pola arpeggio baru
-      setiap kali tombol 'Generate Musik Lain' ditekan.
+    Mencari dan mengunduh rekaman musik instrumen manusia asli (Gitar Akustik, Piano, Strings Sinematik)
+    melalui Internet Archive Open Audio API agar 100% organik seperti Reels Instagram @campersmagz.
+    """
+    search_queries = {
+        "urgent": [
+            "cinematic+tension+instrumental",
+            "dramatic+soundtrack+orchestra+instrumental",
+            "suspense+cinematic+background+music"
+        ],
+        "somber": [
+            "sad+solo+piano+instrumental",
+            "melancholic+cello+piano+instrumental",
+            "emotional+acoustic+piano+soundtrack"
+        ],
+        "upbeat": [
+            "acoustic+folk+guitar+instrumental",
+            "inspiring+acoustic+travel+instrumental",
+            "warm+indie+folk+instrumental"
+        ],
+        "chill": [
+            "fingerstyle+acoustic+guitar+nature",
+            "calm+acoustic+mountain+instrumental",
+            "peaceful+acoustic+guitar+solo"
+        ]
+    }
+
+    q_list = search_queries.get(mood, search_queries["chill"])
+    q_choice = random.choice(q_list)
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+    try:
+        api_url = (
+            f"https://archive.org/advancedsearch.php?q=({q_choice})+AND+mediatype:(audio)"
+            f"&fl[]=identifier&rows=20&output=json"
+        )
+        r = requests.get(api_url, headers=headers, timeout=12)
+        if r.status_code == 200:
+            docs = r.json().get("response", {}).get("docs", [])
+            random.shuffle(docs)
+            for doc in docs[:8]:
+                ident = doc.get("identifier")
+                if not ident:
+                    continue
+                meta_r = requests.get(f"https://archive.org/metadata/{ident}", headers=headers, timeout=10)
+                if meta_r.status_code == 200:
+                    files = meta_r.json().get("files", [])
+                    mp3_files = [
+                        f for f in files
+                        if f.get("name", "").lower().endswith(".mp3")
+                        and 80000 < int(f.get("size", 0) or 0) < 12000000
+                    ]
+                    random.shuffle(mp3_files)
+                    for mf in mp3_files[:3]:
+                        dl_url = f"https://archive.org/download/{ident}/{ urllib.parse.quote(mf['name']) }"
+                        if dl_url in state["used_audio_urls"]:
+                            continue
+                        aud_r = requests.get(dl_url, headers=headers, timeout=18)
+                        if aud_r.status_code == 200 and len(aud_r.content) > 60000:
+                            with open(out_raw, "wb") as f:
+                                f.write(aud_r.content)
+                            state["used_audio_urls"].append(dl_url)
+                            print(f"Rekaman studio asli ({mood}) berhasil diunduh: {dl_url}")
+                            return True
+    except Exception as e:
+        print(f"Archive Audio API info: {e}")
+
+    return False
+
+def karplus_strong_pluck(freq, duration_sec, sample_rate=44100, brightness=0.992):
+    """
+    Algoritma fisika dawai petik (Karplus-Strong):
+    Menghasilkan suara petikan senar gitar akustik / harpa / denting piano nyata yang langsung meluruh,
+    100% BEBAS dari dengungan gelombang sinus / UFO!
+    """
+    n_samples = int(sample_rate * duration_sec)
+    N = max(2, int(sample_rate / float(freq)))
+    # Inisialisasi dawai dengan impuls lembut (warm low-pass filtered burst)
+    ring_buf = [random.uniform(-0.6, 0.6) for _ in range(N)]
+    for i in range(1, N):
+        ring_buf[i] = 0.5 * (ring_buf[i] + ring_buf[i - 1])
+
+    samples = [0.0] * n_samples
+    for i in range(n_samples):
+        samples[i] = ring_buf[i % N]
+        avg = brightness * 0.5 * (ring_buf[i % N] + ring_buf[(i + 1) % N])
+        ring_buf[i % N] = avg
+    return samples
+
+def generate_acoustic_plucked_score_wav(mood="chill", duration=6, out_wav="acoustic_score.wav"):
+    """
+    Komposer Akustik Dawai Petik & Perkusi Kayu (TANPA SINE DRONE / TANPA DENGUNGAN UFO):
+    - Seluruh nada menggunakan pemetik dawai Karplus-Strong (petikan senar gitar akustik & tuts piano pendek).
+    - Tidak ada satu pun gelombang berdengung (continuous drone) atau modulasi frekuensi (vibrato).
     """
     sample_rate = 44100
-    num_samples = int(sample_rate * duration)
+    total_samples = int(sample_rate * duration)
+    mix_left = [0.0] * total_samples
+    mix_right = [0.0] * total_samples
 
-    variant = random.randint(0, 3)
-    octave_shift = random.choice([0.85, 1.0, 1.12, 1.25])
-    arp_direction = random.choice([1, -1, 2])
-
+    # Variasi tangga nada & tempo setiap kali di-generate
     if mood == "urgent":
-        progressions = [
-            [(73.42, [146.83, 220.00, 293.66, 349.23]), (58.27, [116.54, 174.61, 220.00, 293.66]), (98.00, [196.00, 293.66, 349.23, 440.00])],
-            [(65.41, [130.81, 196.00, 261.63, 311.13]), (51.91, [103.83, 155.56, 207.65, 261.63]), (87.31, [174.61, 261.63, 311.13, 392.00])],
-            [(82.41, [164.81, 246.94, 329.63, 392.00]), (65.41, [130.81, 196.00, 246.94, 329.63]), (61.74, [123.47, 185.00, 246.94, 370.00])],
-            [(55.00, [110.00, 164.81, 220.00, 261.63]), (61.74, [123.47, 174.61, 246.94, 329.63]), (73.42, [146.83, 220.00, 293.66, 349.23])]
+        # Petikan gitar tegang & detak perkusi kayu cepat (berita SAR/Darurat)
+        note_pool = [
+            [146.83, 220.00, 293.66, 349.23, 440.00],
+            [164.81, 246.94, 329.63, 392.00, 493.88],
+            [130.81, 196.00, 261.63, 311.13, 392.00]
         ]
-        prog = progressions[variant]
-        pulse_hz = random.choice([3.5, 4.0, 4.5, 5.0])
-
+        step_sec = random.choice([0.22, 0.25, 0.28])
+        bright = 0.994
     elif mood == "somber":
-        progressions = [
-            [(55.00, [110.00, 164.81, 220.00, 261.63]), (43.65, [87.31, 130.81, 174.61, 246.94]), (73.42, [146.83, 220.00, 261.63, 329.63])],
-            [(41.20, [82.41, 123.47, 164.81, 196.00]), (65.41, [130.81, 196.00, 246.94, 329.63]), (55.00, [110.00, 164.81, 220.00, 261.63])],
-            [(73.42, [146.83, 174.61, 220.00, 293.66]), (58.27, [116.54, 174.61, 220.00, 261.63]), (55.00, [110.00, 164.81, 207.65, 277.18])],
-            [(65.41, [130.81, 155.56, 196.00, 261.63]), (51.91, [103.83, 155.56, 196.00, 246.94]), (43.65, [87.31, 130.81, 174.61, 207.65])]
+        # Petikan gitar/piano balada lambat & menyentuh (berita duka)
+        note_pool = [
+            [110.00, 164.81, 220.00, 261.63, 329.63],
+            [146.83, 220.00, 261.63, 349.23, 440.00],
+            [130.81, 196.00, 246.94, 311.13, 392.00]
         ]
-        prog = progressions[variant]
-        pulse_hz = random.choice([0.0, 1.0])
-
+        step_sec = random.choice([0.55, 0.65, 0.75])
+        bright = 0.988
     elif mood == "upbeat":
-        progressions = [
-            [(65.41, [130.81, 196.00, 261.63, 329.63]), (49.00, [98.00, 146.83, 196.00, 246.94]), (43.65, [87.31, 130.81, 174.61, 220.00])],
-            [(73.42, [146.83, 220.00, 293.66, 369.99]), (55.00, [110.00, 164.81, 220.00, 277.18]), (49.00, [98.00, 146.83, 196.00, 246.94])],
-            [(58.27, [116.54, 174.61, 233.08, 293.66]), (43.65, [87.31, 130.81, 174.61, 220.00]), (77.78, [155.56, 233.08, 311.13, 392.00])],
-            [(82.41, [164.81, 246.94, 329.63, 415.30]), (61.74, [123.47, 185.00, 246.94, 311.13]), (55.00, [110.00, 164.81, 220.00, 277.18])]
+        # Petikan gitar folk ceria & ritmis (jalur dibuka/kabar baik)
+        note_pool = [
+            [196.00, 246.94, 293.66, 392.00, 493.88],
+            [261.63, 329.63, 392.00, 523.25, 659.25],
+            [220.00, 277.18, 329.63, 440.00, 554.37]
         ]
-        prog = progressions[variant]
-        pulse_hz = random.choice([2.0, 2.5, 3.0])
-
+        step_sec = random.choice([0.28, 0.32, 0.36])
+        bright = 0.995
     else:
-        progressions = [
-            [(43.65, [87.31, 130.81, 174.61, 246.94]), (65.41, [130.81, 196.00, 246.94, 329.63]), (49.00, [98.00, 146.83, 196.00, 246.94])],
-            [(77.78, [155.56, 233.08, 311.13, 392.00]), (58.27, [116.54, 174.61, 233.08, 293.66]), (43.65, [87.31, 130.81, 174.61, 233.08])],
-            [(55.00, [110.00, 164.81, 196.00, 246.94]), (73.42, [146.83, 220.00, 261.63, 329.63]), (65.41, [130.81, 196.00, 246.94, 293.66])],
-            [(49.00, [98.00, 146.83, 185.00, 246.94]), (65.41, [130.81, 196.00, 246.94, 329.63]), (55.00, [110.00, 164.81, 220.00, 261.63])]
+        # Fingerstyle gitar alam gunung tenang (edukasi/regulasi)
+        note_pool = [
+            [174.61, 220.00, 261.63, 349.23, 440.00],
+            [196.00, 246.94, 293.66, 392.00, 493.88],
+            [146.83, 220.00, 293.66, 369.99, 440.00]
         ]
-        prog = progressions[variant]
-        pulse_hz = random.choice([1.2, 1.5, 2.0])
+        step_sec = random.choice([0.38, 0.42, 0.48])
+        bright = 0.991
+
+    scale = random.choice(note_pool)
+    pattern = random.choice([
+        [0, 2, 3, 4, 3, 2, 1, 2],
+        [0, 1, 2, 4, 2, 1, 0, 3],
+        [0, 3, 2, 4, 1, 3, 2, 0]
+    ])
+
+    t_cursor = 0.0
+    step_idx = 0
+    while t_cursor < duration - 0.2:
+        start_idx = int(t_cursor * sample_rate)
+        note_f = scale[pattern[step_idx % len(pattern)]]
+
+        # Kurva Dinamika: Awal pelan -> Puncak tengah kencang -> Akhir mereda
+        if t_cursor < 1.5:
+            vel = 0.50 + 0.50 * (t_cursor / 1.5)
+        elif t_cursor <= 4.5:
+            vel = 1.15
+        else:
+            vel = max(0.20, 1.15 - 0.95 * ((t_cursor - 4.5) / 1.5))
+
+        pluck_samples = karplus_strong_pluck(note_f, duration_sec=1.4, sample_rate=sample_rate, brightness=bright)
+        pan_l = 0.85 if (step_idx % 2 == 0) else 0.55
+        pan_r = 0.55 if (step_idx % 2 == 0) else 0.85
+
+        for j, s_val in enumerate(pluck_samples):
+            if start_idx + j >= total_samples:
+                break
+            mix_left[start_idx + j] += s_val * vel * pan_l
+            mix_right[start_idx + j] += s_val * vel * pan_r
+
+        # Tambahkan petikan dawai bass akustik setiap 4 ketukan
+        if step_idx % 4 == 0:
+            bass_samples = karplus_strong_pluck(scale[0] * 0.5, duration_sec=1.8, sample_rate=sample_rate, brightness=0.985)
+            for j, b_val in enumerate(bass_samples):
+                if start_idx + j >= total_samples:
+                    break
+                mix_left[start_idx + j] += b_val * vel * 0.65
+                mix_right[start_idx + j] += b_val * vel * 0.65
+
+        t_cursor += step_sec
+        step_idx += 1
 
     with wave.open(out_wav, "w") as wf:
         wf.setnchannels(2)
         wf.setsampwidth(2)
         wf.setframerate(sample_rate)
-
         frames = bytearray()
-        for i in range(num_samples):
-            t = i / float(sample_rate)
-            stage_idx = min(2, int(t / 2.0))
-            bass_f, chord_notes = prog[stage_idx]
-
-            if t < 1.5:
-                dyn_env = 0.35 + 0.65 * (t / 1.5)
-            elif t <= 4.3:
-                mid_boost = 1.0 + 0.25 * math.sin(math.pi * (t - 1.5) / 2.8)
-                dyn_env = min(1.20, mid_boost)
-            else:
-                dyn_env = max(0.05, 1.0 - 0.95 * ((t - 4.3) / 1.7))
-
-            vibrato = 1.0 + 0.002 * math.sin(2.0 * math.pi * 5.2 * t)
-            cello = (
-                0.24 * math.sin(2.0 * math.pi * bass_f * t)
-                + 0.12 * math.sin(2.0 * math.pi * (bass_f * 2.0) * t)
-                + 0.06 * math.sin(2.0 * math.pi * (bass_f * 3.0) * t)
-            )
-
-            pad_left = 0.0
-            pad_right = 0.0
-            for idx_n, nf in enumerate(chord_notes):
-                tremolo = (1.0 + 0.25 * math.sin(2.0 * math.pi * 11.0 * t)) if (mood == "urgent" and 1.5 <= t <= 4.5) else 1.0
-                voice = (
-                    0.11 * math.sin(2.0 * math.pi * (nf * octave_shift) * vibrato * t)
-                    + 0.04 * math.sin(2.0 * math.pi * (nf * octave_shift * 2.0) * t)
-                ) * tremolo
-                if idx_n % 2 == 0:
-                    pad_left += voice
-                    pad_right += voice * 0.7
-                else:
-                    pad_left += voice * 0.7
-                    pad_right += voice
-
-            local_t = t % 2.0
-            piano_env = math.exp(-2.2 * local_t) * (1.0 - math.exp(-40.0 * local_t))
-            melody_note = chord_notes[(stage_idx * arp_direction) % len(chord_notes)] * 2.0 * octave_shift
-            piano = (
-                0.22 * math.sin(2.0 * math.pi * melody_note * t)
-                + 0.09 * math.sin(2.0 * math.pi * (melody_note * 2.0) * t) * math.exp(-4.0 * local_t)
-                + 0.04 * math.sin(2.0 * math.pi * (melody_note * 3.0) * t) * math.exp(-6.0 * local_t)
-            ) * piano_env
-
-            pulse_val = 0.0
-            if pulse_hz > 0:
-                p_period = 1.0 / pulse_hz
-                p_phase = t % p_period
-                p_idx = (int(t / p_period) * arp_direction) % len(chord_notes)
-                p_freq = chord_notes[p_idx] * octave_shift
-                mid_pulse_weight = 1.2 if (1.4 <= t <= 4.4) else 0.5
-                p_env = math.exp(-10.0 * p_phase) * mid_pulse_weight
-                pulse_val = 0.18 * math.sin(2.0 * math.pi * p_freq * t) * p_env
-
-            timpani = 0.0
-            if 1.7 <= t <= 3.2:
-                t_dt = t - 1.7
-                timpani_env = math.exp(-3.0 * t_dt)
-                timpani_freq = 68.0 * math.exp(-4.0 * t_dt) + 45.0
-                timpani = 0.30 * math.sin(2.0 * math.pi * timpani_freq * t_dt) * timpani_env
-
-            left_ch = (cello + pad_left + piano + pulse_val + timpani) * dyn_env
-            right_ch = (cello + pad_right + piano * 0.9 + pulse_val + timpani) * dyn_env
-
-            left_ch = max(-0.98, min(0.98, left_ch))
-            right_ch = max(-0.98, min(0.98, right_ch))
-
-            frames.extend(struct.pack("<hh", int(left_ch * 32767), int(right_ch * 32767)))
-
+        for i in range(total_samples):
+            l_val = max(-0.95, min(0.95, mix_left[i]))
+            r_val = max(-0.95, min(0.95, mix_right[i]))
+            frames.extend(struct.pack("<hh", int(l_val * 32767), int(r_val * 32767)))
         wf.writeframes(frames)
+
     return out_wav
 
+def get_audio_duration(filepath):
+    try:
+        cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", filepath]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+        return float(res.stdout.strip())
+    except Exception:
+        return 0.0
+
 def prepare_mood_audio(mood="chill", duration=6, force_new=False):
+    """
+    Menyiapkan musik latar instrumen asli bergaya Reels CampersMagz (100% BEBAS UFO/DENGUNG):
+    1. Cek file MP3 lokal di repo (jika ada).
+    2. Cari dan unduh rekaman instrumen manusia asli (Gitar Akustik, Piano, Strings) via Internet Archive Audio API.
+    3. Potong pada bagian tengah lagu yang berbeda setiap kali 'Generate Musik Lain' diklik, dengan kurva dinamika:
+       awal fade-in lembut -> puncak di tengah -> akhir fade-out mulus.
+    4. Jika offline, gunakan Karplus-Strong Plucked Acoustic Guitar (dawai petik alami tanpa sine drone).
+    """
     mood = str(mood).lower().strip() if mood else "chill"
     if mood not in ["urgent", "somber", "upbeat", "chill"]:
         mood = "chill"
 
     state["music_gen_count"] = state.get("music_gen_count", 0) + 1
     gen_idx = state["music_gen_count"]
+    raw_audio = f"raw_studio_{mood}_{gen_idx}.mp3"
     processed_audio = f"ready_{mood}_{gen_idx}.mp3"
 
-    # Gunakan file lokal jika ada dan user tidak sedang meminta generate variasi baru
+    # Kurva dinamika berita: Masuk halus 1.2 detik, tengah penuh & jernih, mereda 1.3 detik di akhir
+    af_cinematic = "afade=t=in:st=0:d=1.2,afade=t=out:st=4.7:d=1.3,loudnorm=I=-14:TP=-1.0:LRA=11"
+
+    # 1. Cek jika user punya koleksi lagu di repo lokal
     local_candidates = [f for f in os.listdir(".") if f.lower().startswith(f"bgm_{mood}") and f.lower().endswith(".mp3")]
     if local_candidates and not force_new:
-        raw_audio = random.choice(local_candidates)
-        af_simple = "afade=t=in:st=0:d=1.2,afade=t=out:st=4.6:d=1.4,loudnorm=I=-14:TP=-1.0:LRA=11"
-        res = subprocess.run(["ffmpeg", "-y", "-ss", "0", "-t", str(duration), "-i", raw_audio, "-af", af_simple, processed_audio])
+        chosen_local = random.choice(local_candidates)
+        res = subprocess.run(["ffmpeg", "-y", "-ss", "0", "-t", str(duration), "-i", chosen_local, "-af", af_cinematic, processed_audio])
         if res.returncode == 0 and os.path.exists(processed_audio):
             state["approved_bgm_path"] = processed_audio
             return processed_audio
 
-    wav_file = f"news_score_{mood}_{gen_idx}.wav"
-    generate_editorial_news_score_wav(mood=mood, duration=duration, out_wav=wav_file)
+    # 2. Unduh Rekaman Instrumen Asli (Gitar Akustik / Piano / Strings) dari Internet Archive
+    if fetch_real_studio_instrumental(mood=mood, out_raw=raw_audio):
+        total_dur = get_audio_duration(raw_audio)
+        # Pilih titik potong di bagian tengah lagu (antara detik 12 s/d 45) agar langsung masuk ke melodi utama
+        max_start = max(0, int(total_dur - duration - 3))
+        start_sec = random.randint(10, min(45, max_start)) if max_start > 12 else 0
+
+        res = subprocess.run([
+            "ffmpeg", "-y", "-ss", str(start_sec), "-t", str(duration), "-i", raw_audio,
+            "-af", af_cinematic,
+            processed_audio
+        ])
+        if res.returncode == 0 and os.path.exists(processed_audio):
+            state["approved_bgm_path"] = processed_audio
+            return processed_audio
+
+    # 3. Fallback Dawai Petik Akustik Karplus-Strong (Tanpa Sine Drone / 0% Dengungan UFO)
+    wav_file = f"plucked_{mood}_{gen_idx}.wav"
+    generate_acoustic_plucked_score_wav(mood=mood, duration=duration, out_wav=wav_file)
     subprocess.run([
         "ffmpeg", "-y", "-i", wav_file,
-        "-af", "loudnorm=I=-14:TP=-1.0:LRA=11",
+        "-af", af_cinematic,
         processed_audio
     ], check=True)
     state["approved_bgm_path"] = processed_audio
@@ -1421,7 +1523,7 @@ def render_final_video(mode="pan_image", add_instrumental=True, bgm_override_pat
     return output_mp4
 
 # ==========================================
-# 8. HANDLER INTERAKTIF TELEGRAM (DILENGKAPI PREVIEW & REGENERATE MUSIK)
+# 8. HANDLER INTERAKTIF TELEGRAM
 # ==========================================
 def send_news_candidate():
     if state["current_idx"] >= len(state["articles"]):
@@ -1516,21 +1618,20 @@ def send_caption_review():
     )
     bot.send_message(TELEGRAM_CHAT_ID, f"📝 REVIEW CAPTION (STANDAR CAMPERSMAGZ - NEWS CONVERTER):\n\n{cap}", reply_markup=markup)
 
-def generate_and_send_music_preview(force_new=False):
-    """Membuat preview musik 6 detik dan mengirimkannya ke Telegram sebelum render video"""
+def send_music_preview_menu(bgm_file, custom_label=None):
     mood_raw = state["converter_data"].get("mood_musik") or "chill"
-    mood_str = str(mood_raw).lower().strip()
-    bgm_file = prepare_mood_audio(mood=mood_str, duration=6, force_new=force_new)
+    mood_str = custom_label or str(mood_raw).upper()
 
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("✅ Setuju & Render Video Sekarang", callback_data="music_approve"))
-    markup.add(InlineKeyboardButton("🔄 Generate Musik Lain (Variasi Baru)", callback_data="music_regen"))
+    markup.add(InlineKeyboardButton("🔄 Generate Musik Lain (Cari Lagu Baru)", callback_data="music_regen"))
     markup.row(
         InlineKeyboardButton("🚨 Urgent", callback_data="setmood_urgent"),
         InlineKeyboardButton("🕯️ Somber", callback_data="setmood_somber"),
         InlineKeyboardButton("🌤️ Upbeat", callback_data="setmood_upbeat"),
         InlineKeyboardButton("🌲 Chill", callback_data="setmood_chill")
     )
+    markup.add(InlineKeyboardButton("📤 Upload Musik / Ekstrak dari Reels Sendiri", callback_data="music_upload_custom"))
     if state.get("video_mode") == "user_video":
         markup.add(InlineKeyboardButton("🔊 Batal & Gunakan Audio Asli Video", callback_data="bgm_no"))
     else:
@@ -1540,9 +1641,9 @@ def generate_and_send_music_preview(force_new=False):
     mode_lbl = "Video Pan 6 Detik" if state.get("video_mode") == "pan_image" else "Video Unggahan Anda"
     cap = (
         f"🎧 *PREVIEW MUSIK INSTRUMENTAL #{gen_no}*\n"
-        f"🎵 Suasana: `{mood_str.upper()}`\n"
+        f"🎵 Suasana: `{mood_str}`\n"
         f"🎬 Target: `{mode_lbl}`\n\n"
-        f"Silakan dengarkan terlebih dahulu. Jika belum pas, klik *Generate Musik Lain* atau ganti suasananya:"
+        f"Silakan dengarkan terlebih dahulu. Jika belum cocok, klik *Generate Musik Lain* atau *Upload Musik Sendiri*:"
     )
     with open(bgm_file, "rb") as aud:
         bot.send_audio(
@@ -1550,10 +1651,16 @@ def generate_and_send_music_preview(force_new=False):
             aud,
             caption=cap,
             parse_mode="Markdown",
-            title=f"CampersMagz {mood_str.upper()} #{gen_no}",
-            performer="CampersMagz Editorial Score",
+            title=f"CampersMagz {mood_str} #{gen_no}",
+            performer="CampersMagz Studio Instrumental",
             reply_markup=markup
         )
+
+def generate_and_send_music_preview(force_new=False):
+    mood_raw = state["converter_data"].get("mood_musik") or "chill"
+    mood_str = str(mood_raw).lower().strip()
+    bgm_file = prepare_mood_audio(mood=mood_str, duration=6, force_new=force_new)
+    send_music_preview_menu(bgm_file)
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
@@ -1704,49 +1811,51 @@ def handle_callbacks(call):
             )
             safe_send_message(TELEGRAM_CHAT_ID, "🎬 *PILIH OPSI PEMBUATAN VIDEO:*", reply_markup=markup)
 
-        # Opsi 1: Tidak Upload Video -> Generate Musik Dulu Tanpa Langsung Render Video Pan
         elif data == "vid_no_upload":
             state["video_mode"] = "pan_image"
             bot.answer_callback_query(call.id, "Menyiapkan preview musik...")
-            safe_send_message(TELEGRAM_CHAT_ID, "🎼 *Men-generate preview musik instrumental terlebih dahulu sebelum merender video Pan...*")
+            safe_send_message(TELEGRAM_CHAT_ID, "🎼 *Mencari & menyiapkan preview musik instrumen asli (Gitar Akustik / Piano / Strings)...*")
             generate_and_send_music_preview(force_new=False)
 
-        # Opsi 2: Upload Video Sendiri
         elif data == "vid_upload":
             state["waiting_for_video_upload"] = True
             state["video_mode"] = "user_video"
             bot.answer_callback_query(call.id, "Silakan upload video...")
             safe_send_message(TELEGRAM_CHAT_ID, "📤 *Silakan upload video Anda (otomatis di-crop 6 detik awal).* Tulis sumber di Caption.")
 
-        # User memilih ingin menggunakan generate musik instrumental pada video yang diupload
         elif data == "bgm_yes":
             state["video_mode"] = "user_video"
             bot.answer_callback_query(call.id, "Menyiapkan preview musik...")
-            safe_send_message(TELEGRAM_CHAT_ID, "🎼 *Men-generate preview musik instrumental untuk video Anda...*")
+            safe_send_message(TELEGRAM_CHAT_ID, "🎼 *Mencari & menyiapkan preview musik instrumen asli untuk video Anda...*")
             generate_and_send_music_preview(force_new=False)
 
-        # User memilih tetap menggunakan musik/audio asli dari video yang diupload
         elif data == "bgm_no":
             bot.answer_callback_query(call.id, "Menggunakan audio asli video...")
             safe_send_message(TELEGRAM_CHAT_ID, "⚙️ *Merender video 6 detik dengan mempertahankan suara/musik asli dari video Anda...*")
             mp4 = render_final_video(mode="user_video", add_instrumental=False)
             send_final_package(mp4)
 
-        # Tombol Regenerate Musik Lain
         elif data == "music_regen":
-            bot.answer_callback_query(call.id, "Meracik variasi musik baru...")
-            safe_send_message(TELEGRAM_CHAT_ID, "🔄 *Men-generate komposisi musik instrumental baru...*")
+            bot.answer_callback_query(call.id, "Mencari lagu instrumental baru...")
+            safe_send_message(TELEGRAM_CHAT_ID, "🔄 *Mengambil lagu instrumen studio lainnya...*")
             generate_and_send_music_preview(force_new=True)
 
-        # Tombol Ganti Mood Musik saat Preview
         elif data.startswith("setmood_"):
             new_mood = data.split("_")[1]
             state["converter_data"]["mood_musik"] = new_mood
             bot.answer_callback_query(call.id, f"Mood diubah ke {new_mood.upper()}!")
-            safe_send_message(TELEGRAM_CHAT_ID, f"🎭 *Mengubah suasana ke {new_mood.upper()} & men-generate musik baru...*")
+            safe_send_message(TELEGRAM_CHAT_ID, f"🎭 *Mengubah suasana ke {new_mood.upper()} & mencari lagu instrumen baru...*")
             generate_and_send_music_preview(force_new=True)
 
-        # Tombol Setuju Musik -> Langsung Render Video (Pan / User Video)
+        elif data == "music_upload_custom":
+            state["waiting_for_audio_upload"] = True
+            bot.answer_callback_query(call.id, "Silakan kirim musik/video...")
+            safe_send_message(
+                TELEGRAM_CHAT_ID,
+                "📤 *Silakan kirim file Audio (.mp3/.m4a) ATAU kirim Video Reels lama @campersmagz yang musiknya ingin Anda pakai!* "
+                "(Bot akan otomatis mengekstrak musik 6 detiknya)."
+            )
+
         elif data == "music_approve":
             bot.answer_callback_query(call.id, "Musik disetujui! Merender video...")
             v_mode = state.get("video_mode", "pan_image")
@@ -1755,7 +1864,6 @@ def handle_callbacks(call):
             mp4 = render_final_video(mode=v_mode, add_instrumental=True, bgm_override_path=state.get("approved_bgm_path"))
             send_final_package(mp4)
 
-        # Tombol Render Tanpa Musik (untuk Pan Image)
         elif data == "music_mute":
             bot.answer_callback_query(call.id, "Merender tanpa musik...")
             v_mode = state.get("video_mode", "pan_image")
@@ -1816,8 +1924,58 @@ def handle_user_cover_photo(message):
     except Exception as e:
         safe_send_message(TELEGRAM_CHAT_ID, f"⚠️ Gagal memproses foto: {e}", parse_mode=None)
 
+@bot.message_handler(content_types=["audio", "voice"])
+def handle_user_custom_audio(message):
+    if not state.get("waiting_for_audio_upload"):
+        return
+    try:
+        safe_send_message(TELEGRAM_CHAT_ID, "⏳ Mengunduh & memproses musik pilihan Anda...")
+        aud_obj = message.audio or message.voice
+        f_info = bot.get_file(aud_obj.file_id)
+        file_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{f_info.file_path}"
+        r = requests.get(file_url, timeout=60)
+        raw_custom = "user_custom_raw_audio.mp3"
+        with open(raw_custom, "wb") as f:
+            f.write(r.content)
+
+        state["music_gen_count"] = state.get("music_gen_count", 0) + 1
+        out_custom = f"ready_custom_{state['music_gen_count']}.mp3"
+        af_cinematic = "afade=t=in:st=0:d=0.8,afade=t=out:st=4.7:d=1.3,loudnorm=I=-14:TP=-1.0:LRA=11"
+        subprocess.run(["ffmpeg", "-y", "-ss", "0", "-t", "6", "-i", raw_custom, "-af", af_cinematic, out_custom], check=True)
+
+        state["waiting_for_audio_upload"] = False
+        state["approved_bgm_path"] = out_custom
+        send_music_preview_menu(out_custom, custom_label="CUSTOM PILIHAN ANDA")
+    except Exception as e:
+        safe_send_message(TELEGRAM_CHAT_ID, f"⚠️ Gagal memproses audio: {e}", parse_mode=None)
+
 @bot.message_handler(content_types=["video", "document"])
 def handle_user_video(message):
+    # Jika user sedang di tahap upload musik custom dan mengirim video Reels untuk diambil suaranya
+    if state.get("waiting_for_audio_upload"):
+        try:
+            vid_obj = message.video or message.document
+            safe_send_message(TELEGRAM_CHAT_ID, "⏳ Mengekstrak musik instrumental dari video yang Anda kirim...")
+            f_info = bot.get_file(vid_obj.file_id)
+            file_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{f_info.file_path}"
+            r = requests.get(file_url, timeout=60)
+            raw_vid_aud = "temp_vid_for_audio.mp4"
+            with open(raw_vid_aud, "wb") as f:
+                f.write(r.content)
+
+            state["music_gen_count"] = state.get("music_gen_count", 0) + 1
+            out_custom = f"ready_custom_{state['music_gen_count']}.mp3"
+            af_cinematic = "afade=t=in:st=0:d=0.6,afade=t=out:st=4.7:d=1.3,loudnorm=I=-14:TP=-1.0:LRA=11"
+            subprocess.run(["ffmpeg", "-y", "-ss", "0", "-t", "6", "-i", raw_vid_aud, "-vn", "-af", af_cinematic, out_custom], check=True)
+
+            state["waiting_for_audio_upload"] = False
+            state["approved_bgm_path"] = out_custom
+            send_music_preview_menu(out_custom, custom_label="EKSTRAK REELS ANDA")
+            return
+        except Exception as e:
+            safe_send_message(TELEGRAM_CHAT_ID, f"⚠️ Gagal mengekstrak audio dari video: {e}", parse_mode=None)
+            return
+
     if not state["waiting_for_video_upload"]:
         return
     try:
